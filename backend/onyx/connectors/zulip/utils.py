@@ -62,37 +62,18 @@ def call_api(fun: Callable, *args: Any, **kwargs: Any) -> Dict[str, Any]:
 
 
 def build_search_narrow(
-    *,
-    stream: Optional[str] = None,
-    topic: Optional[str] = None,
-    limit: int = 100,
-    content: Optional[str] = None,
-    apply_md: bool = False,
+    limit: int = 1000,
     anchor: str = "newest",
-) -> Dict[str, Any]:
-    narrow_filters = []
-
-    if stream:
-        narrow_filters.append({"operator": "stream", "operand": stream})
-
-    if topic:
-        narrow_filters.append({"operator": "topic", "operand": topic})
-
-    if content:
-        narrow_filters.append({"operator": "has", "operand": content})
-
-    if not stream and not topic and not content:
-        narrow_filters.append({"operator": "streams", "operand": "public"})
-
-    narrow = {
+    apply_md: bool = True,
+) -> dict[str, Any]:
+    return {
         "anchor": anchor,
         "num_before": limit,
         "num_after": 0,
-        "narrow": narrow_filters,
+        "narrow": [],
+        "client_gravatar": True,
+        "apply_markdown": apply_md,
     }
-    narrow["apply_markdown"] = apply_md
-
-    return narrow
 
 
 def encode_zulip_narrow_operand(value: str) -> str:
@@ -100,3 +81,18 @@ def encode_zulip_narrow_operand(value: str) -> str:
     # safe characters necessary to make Python match Javascript's escaping behaviour,
     # see: https://stackoverflow.com/a/74439601
     return quote(value, safe="!~*'()").replace(".", "%2E").replace("%", ".")
+
+
+def get_web_link(message: Dict[str, Any], realm_url: str) -> str:
+    """Generate a web link to the message using the correct realm URL."""
+    # Remove /api/v1 or other API paths if present in realm_url
+    base_url = realm_url.split('/api/')[0]
+    
+    # Ensure base_url doesn't end with a slash
+    base_url = base_url.rstrip('/')
+    
+    # Construct the message link
+    narrow = f"narrow/stream/{message['stream_id']}-{message.get('stream_name', '')}/topic/{message.get('subject', '')}/near/{message['id']}"
+    
+    # Return the full URL with the correct domain
+    return f"{base_url}/#{narrow}"

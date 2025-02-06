@@ -1,5 +1,6 @@
 import os
 import tempfile
+import urllib.parse
 from collections.abc import Generator
 from typing import Any
 from typing import List
@@ -21,6 +22,7 @@ from onyx.connectors.zulip.schemas import Message
 from onyx.connectors.zulip.utils import build_search_narrow
 from onyx.connectors.zulip.utils import call_api
 from onyx.connectors.zulip.utils import encode_zulip_narrow_operand
+from onyx.connectors.zulip.utils import get_web_link
 from onyx.utils.logger import setup_logger
 
 # Potential improvements
@@ -36,7 +38,19 @@ class ZulipConnector(LoadConnector, PollConnector):
     ) -> None:
         self.batch_size = batch_size
         self.realm_name = realm_name
-        self.realm_url = realm_url if realm_url.endswith("/") else realm_url + "/"
+        
+        # For internal network access, use IP for connection but keep domain for UI links
+        if "work.solutioncenter.ai" in realm_url.lower():
+            self.base_url = "https://work.solutioncenter.ai"  # For UI links
+            self.internal_url = "https://192.168.10.108"      # For API connections
+        elif "aic.zulipchat.com" in realm_url.lower():
+            self.base_url = "https://aic.zulipchat.com"       # For UI links
+            self.internal_url = self.base_url                 # Use same URL for API
+        else:
+            parsed = urllib.parse.urlparse(realm_url)
+            self.base_url = f"{parsed.scheme}://{parsed.netloc.split(':')[0]}"
+            self.internal_url = self.base_url
+        
         self.client: Client | None = None
 
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
@@ -59,7 +73,7 @@ class ZulipConnector(LoadConnector, PollConnector):
         stream_operand = encode_zulip_narrow_operand(f"{m.stream_id}-{stream_name}")
         topic_operand = encode_zulip_narrow_operand(m.subject)
 
-        narrow_link = f"{self.realm_url}#narrow/stream/{stream_operand}/topic/{topic_operand}/near/{m.id}"
+        narrow_link = f"{self.base_url}#narrow/stream/{stream_operand}/topic/{topic_operand}/near/{m.id}"
         return narrow_link
 
     def _get_message_batch(self, anchor: str) -> Tuple[bool, List[Message]]:
@@ -68,32 +82,32 @@ class ZulipConnector(LoadConnector, PollConnector):
 
         logger.info(f"Fetching messages starting with anchor={anchor}")
         request = build_search_narrow(
-            limit=INDEX_BATCH_SIZE, anchor=anchor, apply_md=False
+            limit=INDEX_BATCH_SIZE,
+            anchor=str(anchor),  # This isn't enough - we need to fix where the int comes from
+            apply_md=False
         )
         response = GetMessagesResponse(**call_api(self.client.get_messages, request))
 
-        end = False
-        if len(response.messages) == 0 or response.found_oldest:
-            end = True
-
-        # reverse, so that the last message is the new anchor
-        # and the order is from newest to oldest
+        end = len(response.messages) == 0 or response.found_oldest
         return end, response.messages[::-1]
 
     def _message_to_doc(self, message: Message) -> Document:
         text = f"{message.sender_full_name}: {message.content}"
-
+        
+        # Use our existing method to generate the link
+        narrow_link = self._message_to_narrow_link(message)
+        
         return Document(
             id=f"{message.stream_id}__{message.id}",
             sections=[
                 Section(
-                    link=self._message_to_narrow_link(message),
+                    link=narrow_link,
                     text=text,
                 )
             ],
             source=DocumentSource.ZULIP,
             semantic_identifier=message.display_recipient or message.subject,
-            metadata={},
+            metadata={},  # Remove the duplicate link in metadata
         )
 
     def _get_docs(
