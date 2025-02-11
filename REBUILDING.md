@@ -1,71 +1,63 @@
 ## Rebuilding Onyx After Local Changes
 
-When you make changes to the local codebase and need to rebuild the Docker containers, follow these steps:
+When you need to rebuild the local Onyx stack after code changes or updates, follow these steps:
 
-### 1. Navigate to the Docker Compose Directory
+### 1. Save Local Changes
 ```bash
+# Stash any local changes
+git stash save "describe your changes"
+```
+
+### 2. Update from Main
+```bash
+# Configure git to use merge strategy
+git config pull.rebase false
+
+# Pull latest changes
+git pull origin main
+
+# Apply your local changes back
+git stash apply
+```
+
+### 3. Rebuild the Stack
+```bash
+# Navigate to docker compose directory
 cd deployment/docker_compose
-```
 
-### 2. Stop the Current Stack
-```bash
-docker compose -f docker-compose.dev.yml -p onyx-stack down
-```
-
-### 3. Rebuild and Start the Stack
-```bash
+# Rebuild with the correct stack name
 docker compose -f docker-compose.dev.yml -p onyx-stack up -d --build --force-recreate
 ```
 
-### 4. Verify the Stack is Running
+### 4. Verify
 ```bash
+# Check all containers are running
 docker ps
+
+# Test the web interface
+open http://localhost:3000
 ```
 
 ### Notes
-- The rebuild process will take a few minutes as it rebuilds the affected containers
-- Your data will persist as it's stored in Docker volumes
-- We're using the development configuration (`docker-compose.dev.yml`) which includes hot reloading and development defaults
-- No .env file is needed as the dev configuration includes default values
-- During rebuilds:
-  - Only containers affected by code changes will be rebuilt
-  - The web interface (localhost:3000) may still be available while other containers rebuild
-  - Backend changes (like Zulip connector updates) will rebuild faster than model servers
-- The `-p onyx-stack` flag ensures we're working with the correct stack name
+- The `-p onyx-stack` flag is crucial - it ensures we're updating the correct stack
+- Your data persists across rebuilds (stored in Docker volumes)
+- The development configuration includes hot reloading for future changes
+- No .env file is needed as the dev configuration includes defaults
 
-### Stashing local changes
+### Disaster Recovery
+- Docker Desktop's "Include VM in Time Machine backups" is enabled on MacOS
+  - This backs up the entire Docker environment, including volumes
+  - Provides a full system restore point if needed
+- Git tags provide code-level recovery points
+- Docker volumes persist data even if containers are removed
+  - Located in `~/Library/Containers/com.docker.docker/Data/vms/0/data/`
+  - Backed up with Time Machine when VM backups are enabled
 
-To merge a `git stash` into the `main` branch after performing a `git stash` and then a `git pull`, follow these steps:
+### After Successful Rebuild
+```bash
+# Clean up the stash if everything works
+git stash drop
 
-1. **Stash your changes**:
-   ```bash
-   git stash
-   ```
-
-2. **Pull the latest changes from the remote**:
-   ```bash
-   git pull origin main
-   ```
-
-3. **Apply the stashed changes**:
-   ```bash
-   git stash apply
-   ```
-   - This will apply the stashed changes to your working directory.
-
-4. **Resolve any conflicts** (if necessary):
-   - If there are conflicts, resolve them manually, then stage the resolved files.
-
-5. **Commit the merged changes**:
-   ```bash
-   git add .
-   git commit -m "Merged stashed changes"
-   ```
-
-6. **(Optional) Drop the stash if no longer needed**:
-   ```bash
-   git stash drop
-   ```
-   - Or use `git stash pop` instead of `git stash apply` to apply and immediately drop the stash in one command.
-
-This process will merge your stashed changes into the `main` branch after pulling the latest updates.
+# Optionally, tag the working version
+git tag -a v1.x.x -m "Working local build with [describe changes]"
+```
