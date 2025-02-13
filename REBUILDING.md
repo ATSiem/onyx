@@ -9,6 +9,9 @@ git stash save "pending changes before update"
 
 # Create backup tag of clean state
 git tag -a backup-$(date +%Y%m%d) -m "Clean state before update"
+
+# Verify tag
+git show backup-$(date +%Y%m%d)
 ```
 
 ### 2. Update Code
