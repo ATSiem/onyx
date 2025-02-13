@@ -214,7 +214,7 @@ module.exports = {
 
         input: "var(--white-card-popover)",
 
-        text: "var(--neutral-900)",
+        text: "var(--neutral-950)",
         "text-darker": "var(--text-darker)",
         "text-dark": "var(--text-dark)",
         "sidebar-border": "var(--neutral-200-border)",
@@ -263,7 +263,7 @@ module.exports = {
         "agent-sidebar": "var(--agent-sidebar)",
         agent: "var(--agent)",
         "lighter-agent": "var(--lighter-agent)",
-
+        "agent-hovered": "var(--agent-hovered)",
         // hover
         "hover-light": "var(--hover-light)",
         "hover-lightish": "var(--neutral-125)",
