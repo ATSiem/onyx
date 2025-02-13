@@ -113,6 +113,7 @@ services:
       - API_KEY_HASH_ROUNDS=${API_KEY_HASH_ROUNDS:-}
       # Seeding configuration
       - USE_IAM_AUTH=${USE_IAM_AUTH:-}
+      - UNSTRUCTURED_API_URL=http://host.docker.internal:8000
     # Uncomment the line below to use if IAM_AUTH is true and you are using iam auth for postgres
     # volumes:
     #   - ./bundle.pem:/app/bundle.pem:ro
