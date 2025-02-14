@@ -1,59 +1,68 @@
-## Rebuilding Onyx After Local Changes
+## Onyx Development and Deployment Guide
 
-We are running a local fork of Onyx with a local instance of Unstructured. We are not pushing all our changes back to the Onyx repo. We will share specific changes i.e. enhancements to connectors as PRs.
+### Environment Setup
+We maintain two environments:
+- **Development** (`onyx-dev`): 
+  - Local development on MacBook Pro
+  - Repository: https://github.com/ATSiem/onyx
+  - Uses `docker-compose.dev.yml`
+  - Local Unstructured API at `host.docker.internal:8000`
 
-When you need to rebuild the local Onyx stack after code changes or updates, follow these steps:
+- **Production** (`onyx`):
+  - Runs on Mac mini at knowledge.solutioncenter.ai
+  - Pulls from ATSiem/onyx repository
+  - Will use `docker-compose.yml` for Let's Encrypt SSL
+  - Same local Unstructured API configuration
 
-### 1. Save Current State
+### Development Workflow
+
+#### 1. Making Changes
 ```bash
-# If any local uncommitted changes, stash them
-# git stash save "pending changes before update"
-
-# Create backup tag of clean state
-git tag -a backup-$(date +%Y%m%d) -m "Clean state before update"
-
-# Verify tag
-git show backup-$(date +%Y%m%d)
-```
-
-### 2. Update Code
-```bash
-# Update from remote repo
+# Start from updated main
+git checkout main
 git pull origin main
 
-# If pull succeeds and there are pending stashed changes, apply them
-# git stash apply
+# Create feature branch
+git checkout -b feature/your-feature
 
-# If pull fails:
-# git checkout backup-$(date +%Y%m%d)  # return to last working state
+# Save work in progress (if needed)
+git stash save "pending changes"
+git tag -a backup-$(date +%Y%m%d) -m "Clean state"
 ```
 
-### 3. Rebuild Stack
+#### 2. Rebuilding After Changes
 ```bash
+# Development Environment
 cd deployment/docker_compose
 docker compose -f docker-compose.dev.yml -p onyx-stack up -d --build --force-recreate
-```
 
-### 4. Verify
-```bash
-# Check containers
+# Verify
 docker ps
-
-# Test web interface
 open http://localhost:3000
 ```
 
-### Notes
-- The `-p onyx-stack` flag ensures we're updating the correct stack
-- Data persists across rebuilds (stored in Docker volumes)
-- No .env file needed for dev configuration
+#### 3. Creating PRs
+When contributing back to upstream Onyx:
+```bash
+# Create clean branch without environment-specific changes
+git checkout -b feature/upstream main
+git cherry-pick -x --exclude=429a7e743 <your-feature-commits> # i.e. local Unstructured API URL change
+git push fork feature/upstream
+# then submit PR via https://github.com/onyx-dot-app/onyx/compare
+```
 
-### Disaster Recovery
-- Docker Desktop's "Include VM in Time Machine backups" is enabled
-  - Backs up entire Docker environment including volumes
-- Local backup tags provide restore points
-  - Created in Step 1 using: `git tag -a backup-$(date +%Y%m%d)`
-  - These tags are local only
-  - To list backups: `git tag -l "backup-*"`
-  - To restore: `git checkout backup-YYYYMMDD`
-- Docker volumes persist in: `~/Library/Containers/com.docker.docker/Data/vms/0/data/`
+### Production Deployment
+1. On Mac mini:
+   ```bash
+   cd deployment/docker_compose
+   docker compose -f docker-compose.yml -p onyx-stack up -d --build --force-recreate
+   ```
+2. Let's Encrypt will automatically handle SSL for knowledge.solutioncenter.ai
+
+### Notes
+- Data persists in Docker volumes
+
+- No .env file needed for development
+- Time Machine backups enabled for Docker Desktop on dev and prod
+- Local git tags (`backup-*`) provide restore points
+- Docker volumes: `~/Library/Containers/com.docker.docker/Data/vms/0/data/`
