@@ -1,11 +1,13 @@
 ## Rebuilding Onyx After Local Changes
 
+We are running a local fork of Onyx with a local instance of Unstructured. We are not pushing all our changes back to the Onyx repo. We will share specific changes i.e. enhancements to connectors as PRs.
+
 When you need to rebuild the local Onyx stack after code changes or updates, follow these steps:
 
 ### 1. Save Current State
 ```bash
-# Stash any uncommitted changes
-git stash save "pending changes before update"
+# If any local uncommitted changes, stash them
+# git stash save "pending changes before update"
 
 # Create backup tag of clean state
 git tag -a backup-$(date +%Y%m%d) -m "Clean state before update"
@@ -16,11 +18,11 @@ git show backup-$(date +%Y%m%d)
 
 ### 2. Update Code
 ```bash
-# Update from upstream
+# Update from remote repo
 git pull origin main
 
-# If pull succeeds:
-git stash apply  # restore pending changes
+# If pull succeeds and there are pending stashed changes, apply them
+# git stash apply
 
 # If pull fails:
 # git checkout backup-$(date +%Y%m%d)  # return to last working state
