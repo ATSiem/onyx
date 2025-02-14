@@ -6,7 +6,7 @@ We maintain two environments:
   - Local development on MacBook Pro
   - Repository: https://github.com/ATSiem/onyx
   - Uses `docker-compose.dev.yml`
-  - Local Unstructured API at `host.docker.internal:8000`
+  - Local Unstructured API at `host.docker.internal:8000` via https://github.com/Unstructured-IO/unstructured-api
 
 - **Production** (`onyx`):
   - Runs on Mac mini at knowledge.solutioncenter.ai
