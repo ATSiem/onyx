@@ -7,6 +7,9 @@ We maintain two environments:
   - Repository: https://github.com/ATSiem/onyx
   - Uses `docker-compose.dev.yml`
   - Local Unstructured API at `host.docker.internal:8000` via https://github.com/Unstructured-IO/unstructured-api
+  - download: `docker pull --platform linux/amd64 downloads.unstructured.io/unstructured-io/unstructured-api:latest`
+  - run: `docker run --platform linux/amd64 -p 8000:8000 -d --rm --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest`
+
 
 - **Production** (`onyx`):
   - Runs on Mac mini at knowledge.solutioncenter.ai
@@ -52,11 +55,21 @@ git push fork feature/upstream
 ```
 
 ### Production Deployment
+
+0. Ensure you have the latest changes from upstream:
+```bash
+# On Mac mini
+git remote add fork https://github.com/ATSiem/onyx.git # if not already added
+git fetch fork
+git checkout main
+git pull fork main
+```
+
 1. On Mac mini:
-   ```bash
-   cd deployment/docker_compose
-   docker compose -f docker-compose.yml -p onyx-stack up -d --build --force-recreate
-   ```
+  ```bash
+  cd deployment/docker_compose
+  docker compose -f docker-compose.yml -p onyx-stack up -d --build --force-recreate
+  ```
 2. Let's Encrypt will automatically handle SSL for knowledge.solutioncenter.ai
 
 ### Notes
