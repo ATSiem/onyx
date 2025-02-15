@@ -4,7 +4,7 @@
 We maintain two environments:
 
 #### Development (`onyx-dev`)
-- Local development on MacBook Pro
+- Local development on MacBook Pro at localhost:3000
 - Repository: https://github.com/ATSiem/onyx
 - Uses `docker-compose.dev.yml`
 
@@ -12,6 +12,7 @@ We maintain two environments:
 - Runs on Mac mini at knowledge.solutioncenter.ai
 - Pulls from ATSiem/onyx repository
 - Uses `docker-compose.prod.yml` for Let's Encrypt SSL
+- Uses .env and .env.nginx in deployment/docker_compose
 
 ### Unstructured API Setup
 Both environments use a local Unstructured API:
@@ -22,12 +23,18 @@ docker pull --platform linux/amd64 downloads.unstructured.io/unstructured-io/uns
 # Run locally
 docker run --platform linux/amd64 -p 8000:8000 -d --rm --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
 
-# setup API key
+# Generate and set up API key
 docker exec -it unstructured-api bash
-python3 -c "import uuid; print(uuid.uuid4())"
+python3 -c "import uuid; print(uuid.uuid4())"  # Copy this generated UUID
+
+# Set the API key in Onyx UI:
+# 1. Go to Settings > Unstructured API
+# 2. Paste the generated UUID into the API Key field
+# 3. Click Save - this stores the key in Onyx's key-value store
 
 # Verify API is running and healthy
 docker ps | grep unstructured-api  # Should show container running
+curl -I http://localhost:8000/health  # Should return HTTP 200
 
 # Test document processing
 curl -X POST http://localhost:8000/partition \
@@ -36,17 +43,28 @@ curl -X POST http://localhost:8000/partition \
     -d '{"strategy": "auto", "text": "Test document"}'
 ```
 
-If the API is not responding:
+If the API is not responding or file processing fails:
 1. Check logs: `docker logs unstructured-api`
 2. Restart container: `docker restart unstructured-api`
 3. Verify no port conflicts on 8000
+4. Verify API key is properly set in Onyx UI
+5. Check background service logs: `docker logs onyx-stack-background-1`
+
+To verify file processing is working:
+1. Upload test documents through the Onyx UI
+2. Start reindexing the file connector
+3. Monitor processing in logs:
+   ```bash
+   docker logs onyx-stack-background-1 2>&1 | grep -i "Starting to read file\|processing"
+   ```
+4. Successful processing should show batch processing times around 1.5-2 seconds per batch
 
 ### Git Workflow
 
 #### Repository Structure
-- **Origin** (`onyx-dot-app/onyx`): Upstream repository, used only as reference
+- **Origin** (`onyx-dot-app/onyx`): Upstream repository, used only as source for new functionality from Onyx team
 - **Fork** (`ATSiem/onyx`): Used for:
-  1. Submitting PRs to upstream
+  1. Submitting PRs to upstream Onyx team
   2. Deploying to production
   3. Sharing changes between development and production
 
@@ -68,14 +86,14 @@ When contributing to upstream Onyx:
 ```bash
 # Create clean branch without environment-specific changes
 git checkout -b feature/upstream main
-git cherry-pick -x --exclude=429a7e743 <your-feature-commits>  # exclude local config changes
+git cherry-pick -x --exclude=429a7e743 <your-feature-commits>  # exclude local config changes as needed i.e. unstructured api changes and local documentation
 git push fork feature/upstream
 # Create PR at https://github.com/onyx-dot-app/onyx/compare
 ```
 
 ### Deployment
 
-#### Development
+#### to Development Environment
 ```bash
 # From repository root
 docker compose -f deployment/docker_compose/docker-compose.dev.yml -p onyx-stack up -d --build --force-recreate
@@ -87,7 +105,7 @@ Remember: Always commit your changes and push to fork before major operations. U
 git tag -a backup-$(date +%Y%m%d) -m "Pre-operation backup"
 ```
 
-#### Production
+#### to Production Environment
 ```bash
 # On Mac mini, from repository root
 git fetch fork
@@ -133,7 +151,7 @@ docker compose -f deployment/docker_compose/docker-compose.prod.yml -p onyx-stac
 # On development (MacBook Pro)
 git fetch fork
 git reset --hard fork/main    # Warning: discards local changes
-git clean -fd                 # Remove untracked files
+git clean -fd                 # Aggressive! Remove untracked files
 
 # On production (Mac mini)
 git fetch fork
@@ -151,8 +169,8 @@ docker compose -f deployment/docker_compose/docker-compose.prod.yml -p onyx-stac
 
 ### Notes
 - Data persists in Docker volumes (`~/Library/Containers/com.docker.docker/Data/vms/0/data/`)
-- No .env file needed for development
+- No .env file needed for development environment, only production
 - Time Machine backups enabled for Docker Desktop on dev and prod
 - Local git tags (`backup-*`) provide restore points
-- Development environment pushes only to fork (ATSiem/onyx), never to origin
+- Development environment pushes only to fork (ATSiem/onyx), never to upstream origin to Onyx team
 - Keep feature branches active while PRs are open in upstream (onyx-dot-app/onyx)
