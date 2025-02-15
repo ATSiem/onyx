@@ -1,6 +1,7 @@
 from typing import Any
 from typing import cast
 from typing import IO
+import os
 
 from unstructured.staging.base import dict_to_elements
 from unstructured_client import UnstructuredClient  # type: ignore
@@ -54,14 +55,40 @@ def unstructured_to_text(file: IO[Any], file_name: str) -> str:
     logger.debug(f"Starting to read file: {file_name}")
     req = _sdk_partition_request(file, file_name, strategy="fast")
 
-    unstructured_client = UnstructuredClient(api_key_auth=get_unstructured_api_key())
+    local_api_url = os.getenv("UNSTRUCTURED_API_URL")
+    api_key = get_unstructured_api_key()
 
+    if local_api_url:
+        try:
+            logger.debug(f"Using local Unstructured API at {local_api_url}")
+            unstructured_client = UnstructuredClient(
+                server_url=local_api_url,
+                api_key_auth=api_key,
+            )
+            response = unstructured_client.general.partition(req)  # type: ignore
+            
+            if not hasattr(response, 'elements'):
+                err = f"Invalid response from local Unstructured API: missing elements"
+                logger.error(err)
+                raise ValueError(err)
+                
+            elements = dict_to_elements(response.elements)
+            return "\n\n".join(str(el) for el in elements)
+            
+        except Exception as e:
+            err = f"Failed to use local Unstructured API (configured at {local_api_url}): {str(e)}"
+            logger.error(err)
+            raise ValueError(err)
+    
+    # Only reach here if no local API configured
+    logger.debug("No local API configured, using public Unstructured API")
+    unstructured_client = UnstructuredClient(api_key_auth=api_key)
     response = unstructured_client.general.partition(req)  # type: ignore
-    elements = dict_to_elements(response.elements)
-
-    if response.status_code != 200:
-        err = f"Received unexpected status code {response.status_code} from Unstructured API."
+    
+    if not hasattr(response, 'elements'):
+        err = f"Invalid response from public Unstructured API: missing elements"
         logger.error(err)
         raise ValueError(err)
-
+        
+    elements = dict_to_elements(response.elements)
     return "\n\n".join(str(el) for el in elements)
