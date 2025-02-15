@@ -22,6 +22,10 @@ docker pull --platform linux/amd64 downloads.unstructured.io/unstructured-io/uns
 # Run locally
 docker run --platform linux/amd64 -p 8000:8000 -d --rm --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
 
+# setup API key
+docker exec -it unstructured-api bash
+python3 -c "import uuid; print(uuid.uuid4())"
+
 # Verify API is running and healthy
 docker ps | grep unstructured-api  # Should show container running
 
