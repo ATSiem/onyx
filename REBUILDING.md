@@ -16,6 +16,9 @@ We maintain two environments:
 
 ### Unstructured API Setup
 Both environments use a local Unstructured API:
+
+> **Note**: Both development and production environments are configured to use `http://host.docker.internal:8000` as the Unstructured API URL in their respective docker-compose files. This is set via the `UNSTRUCTURED_API_URL` environment variable in both `api_server` and `background` services.
+
 ```bash
 # Download image
 docker pull --platform linux/amd64 downloads.unstructured.io/unstructured-io/unstructured-api:latest
@@ -34,13 +37,31 @@ python3 -c "import uuid; print(uuid.uuid4())"  # Copy this generated UUID
 
 # Verify API is running and healthy
 docker ps | grep unstructured-api  # Should show container running
-curl -I http://localhost:8000/health  # Should return HTTP 200
+curl http://localhost:8000/healthcheck  # Should return HEALTHCHECK STATUS: EVERYTHING OK!
 
 # Test document processing
-curl -X POST http://localhost:8000/partition \
+# First create a test file
+echo "Test document" > test.txt
+
+# Test processing with the correct endpoint
+curl -X POST http://localhost:8000/general/v0/general \
     -H 'accept: application/json' \
-    -H 'Content-Type: application/json' \
-    -d '{"strategy": "auto", "text": "Test document"}'
+    -H 'Content-Type: multipart/form-data' \
+    -H 'unstructured-api-key: YOUR-UUID-HERE' \
+    -F "files=@test.txt" \
+    -F "strategy=auto"
+
+# Expected successful response should look like:
+# [{
+#   "type": "Title",
+#   "element_id": "...",
+#   "text": "Test document",
+#   "metadata": {
+#     "languages": ["eng"],
+#     "filename": "test.txt",
+#     "filetype": "text/plain"
+#   }
+# }]
 ```
 
 If the API is not responding or file processing fails:
@@ -131,7 +152,7 @@ docker volume ls | grep onyx    # Verify persistent volumes
 docker logs -f onyx-stack-app-1 # Monitor application logs
 
 # Verify Unstructured API
-curl -I http://localhost:8000/health  # Should return HTTP 200
+curl http://localhost:8000/healthcheck  # Should return HEALTHCHECK STATUS: EVERYTHING OK!
 ```
 
 ### Troubleshooting Guide
