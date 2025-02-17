@@ -190,9 +190,11 @@ docker compose -f deployment/docker_compose/docker-compose.prod.yml -p onyx-stac
 
 ### Notes
 - Data persists in Docker volumes (`~/Library/Containers/com.docker.docker/Data/vms/0/data/`)
-- No .env file needed for development environment, only production
 - Time Machine backups enabled for Docker Desktop on dev and prod
 - Local git tags (`backup-*`) provide restore points
   - `git tag -l "backup-*" -n1 --sort=-creatordate` to review all backups
 - Development environment pushes only to fork (ATSiem/onyx), never to upstream origin to Onyx team
 - Keep feature branches active while PRs are open in upstream (onyx-dot-app/onyx)
+
+### Email Configuration
+For email invites to work properly, ensure `MULTI_TENANT=true` is set in your `.env` file.
