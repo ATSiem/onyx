@@ -1,7 +1,6 @@
 import os
 import tempfile
 import urllib.parse
-import urllib.parse
 from collections.abc import Generator
 from datetime import datetime
 from datetime import timezone
@@ -9,8 +8,7 @@ from typing import Any
 from typing import Dict
 from typing import List
 from typing import Tuple
-from typing import Dict, Union
-from datetime import datetime, timezone
+from typing import Union
 
 from zulip import Client
 
@@ -77,13 +75,6 @@ class ZulipConnector(LoadConnector, PollConnector):
                 f"Error: {str(e)}"
             )
 
-        except Exception as e:
-            raise ValueError(
-                f"Failed to parse Zulip realm URL: {realm_url}. "
-                f"Please provide a URL in the format: domain.com or https://domain.com. "
-                f"Error: {str(e)}"
-            )
-
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         contents = credentials["zuliprc_content"]
         # The input field converts newlines to spaces in the provided
@@ -104,17 +95,7 @@ class ZulipConnector(LoadConnector, PollConnector):
             stream_name = m.display_recipient  # assume str
             stream_operand = encode_zulip_narrow_operand(f"{m.stream_id}-{stream_name}")
             topic_operand = encode_zulip_narrow_operand(m.subject)
-        try:
-            stream_name = m.display_recipient  # assume str
-            stream_operand = encode_zulip_narrow_operand(f"{m.stream_id}-{stream_name}")
-            topic_operand = encode_zulip_narrow_operand(m.subject)
 
-            narrow_link = f"{self.base_url}#narrow/stream/{stream_operand}/topic/{topic_operand}/near/{m.id}"
-            return narrow_link
-        except Exception as e:
-            logger.error(f"Error generating Zulip message link: {e}")
-            # Fallback to a basic link that at least includes the base URL
-            return f"{self.base_url}#narrow/id/{m.id}"
             narrow_link = f"{self.base_url}#narrow/stream/{stream_operand}/topic/{topic_operand}/near/{m.id}"
             return narrow_link
         except Exception as e:
@@ -186,9 +167,6 @@ class ZulipConnector(LoadConnector, PollConnector):
                 )
             ],
             source=DocumentSource.ZULIP,
-            semantic_identifier=f"{message.display_recipient} > {message.subject}",
-            metadata=metadata,
-            doc_updated_at=doc_time,  # Use most recent edit time or post time
             semantic_identifier=f"{message.display_recipient} > {message.subject}",
             metadata=metadata,
             doc_updated_at=doc_time,  # Use most recent edit time or post time
