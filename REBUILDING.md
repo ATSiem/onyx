@@ -123,7 +123,7 @@ open http://localhost:3000
 
 Remember: Always commit your changes and push to fork before major operations. Use git tags for safety:
 ```bash
-git tag -a backup-$(date +%Y%m%d) -m "Pre-operation backup"
+git tag -a backup-$(date +%Y%m%d-%H%M) -m "Pre-operation backup"
 ```
 
 #### to Production Environment
@@ -193,5 +193,6 @@ docker compose -f deployment/docker_compose/docker-compose.prod.yml -p onyx-stac
 - No .env file needed for development environment, only production
 - Time Machine backups enabled for Docker Desktop on dev and prod
 - Local git tags (`backup-*`) provide restore points
+  - `git tag -l "backup-*" -n1 --sort=-creatordate` to review all backups
 - Development environment pushes only to fork (ATSiem/onyx), never to upstream origin to Onyx team
 - Keep feature branches active while PRs are open in upstream (onyx-dot-app/onyx)
