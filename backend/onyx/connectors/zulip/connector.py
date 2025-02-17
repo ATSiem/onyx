@@ -68,13 +68,6 @@ class ZulipConnector(LoadConnector, PollConnector):
             self.base_url = f"https://{netloc}"
             self.client: Client | None = None
 
-        except Exception as e:
-            raise ValueError(
-                f"Failed to parse Zulip realm URL: {realm_url}. "
-                f"Please provide a URL in the format: domain.com or https://domain.com. "
-                f"Error: {str(e)}"
-            )
-
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
         contents = credentials["zuliprc_content"]
         # The input field converts newlines to spaces in the provided
