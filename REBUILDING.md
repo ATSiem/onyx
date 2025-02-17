@@ -99,7 +99,7 @@ git checkout -b feature/your-feature
 
 # Optional: Save work in progress
 git stash save "pending changes"
-git tag -a backup-$(date +%Y%m%d) -m "Clean state"
+git tag -a backup-$(date +%Y%m%d-%H%M) -m "Clean state"
 ```
 
 #### Submitting PRs
