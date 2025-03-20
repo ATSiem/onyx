@@ -13,3 +13,4 @@ backend/tests/regression/answer_quality/test_data.json
 deployment/data/certbot/
 deployment/data/sslcerts/
 local-config/
+/db-backups/
