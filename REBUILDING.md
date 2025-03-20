@@ -230,6 +230,16 @@ The Jest configuration is in `web/jest.config.js` and Babel configuration in `we
 - **Integration Tests**: Test interactions between components
 - **E2E Tests**: Use Playwright for end-to-end testing (in `web/tests/e2e/`)
 
+#### Fork-Specific Regression Tests
+This fork contains specific regression tests to verify our custom fixes are maintained when merging from upstream:
+
+```bash
+# Run regression tests
+./scripts/pre-merge-check.sh
+```
+
+See `REGRESSION_TESTS.md` for details on the regression tests and how they protect our custom functionality.
+
 #### Best Practices
 1. Write tests for any bugs found in production
 2. Use descriptive test names that explain what's being tested
