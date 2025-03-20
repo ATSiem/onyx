@@ -1,6 +1,8 @@
 import inspect
 import pytest
 from typing import get_type_hints
+import importlib.metadata
+from packaging import version as parse_version
 
 """
 This regression test verifies that our fork maintains compatibility with the Zulip API schema.
@@ -94,4 +96,28 @@ def test_metadata_string_conversion_exists():
         for pattern in string_conversion_patterns:
             assert pattern in source, f"Connector missing string conversion pattern: {pattern}"
     except ImportError:
-        pytest.skip("Zulip connector not available - skipping test") 
+        pytest.skip("Zulip connector not available - skipping test")
+
+
+def test_zulip_client_version_compatibility():
+    """Test that the installed Zulip client version is compatible with what we need."""
+    try:
+        # Get the installed version of zulip client
+        zulip_version = importlib.metadata.version("zulip")
+        
+        # Use version range instead of exact match
+        min_version = "0.8.0"
+        max_version = "1.0.0"  # Assuming API won't break in minor versions
+        
+        # Verify version is within acceptable range
+        version_obj = parse_version.parse(zulip_version)
+        min_version_obj = parse_version.parse(min_version)
+        max_version_obj = parse_version.parse(max_version)
+        
+        assert version_obj >= min_version_obj, f"Zulip client version too old. Got {zulip_version}, need at least {min_version}"
+        assert version_obj < max_version_obj, f"Zulip client version too new. Got {zulip_version}, maximum supported is {max_version}"
+        
+        # Log the actual version for reference
+        print(f"Using Zulip client version: {zulip_version}")
+    except (ImportError, importlib.metadata.PackageNotFoundError):
+        pytest.skip("Zulip package not installed - skipping version test") 
