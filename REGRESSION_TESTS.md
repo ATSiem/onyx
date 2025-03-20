@@ -49,6 +49,8 @@ To run the regression tests manually:
 - API Key Management: `backend/tests/unit/file_processing/test_unstructured.py`
 - Text Extraction: `backend/tests/unit/file_processing/test_unstructured_text_extraction.py`
 - Document Pipeline Integration: `backend/tests/unit/file_processing/test_extract_file_text.py`
+- Code Integration Check: `scripts/check_unstructured_integration.sh`
+- API Health Check: `scripts/test_unstructured_api_health.sh` - Verifies a running Unstructured API can process documents by uploading a test text file and confirming the response
 
 ## How to Add New Regression Tests
 

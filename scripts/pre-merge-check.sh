@@ -18,6 +18,11 @@ echo "Running Unstructured API integration check..."
 cd "$(git rev-parse --show-toplevel)"
 ./scripts/check_unstructured_integration.sh
 
+# Run Unstructured API health check
+echo "Running Unstructured API health check..."
+cd "$(git rev-parse --show-toplevel)"
+./scripts/test_unstructured_api_health.sh
+
 # Run frontend regression tests
 cd "$(git rev-parse --show-toplevel)/web"
 echo "Running frontend regression tests..."
