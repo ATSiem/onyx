@@ -36,6 +36,20 @@ To run the regression tests manually:
 **Tests:**
 - `backend/tests/unit/test_email_invites.py`
 
+### 3. Unstructured API Integration
+
+**Issue:** Our fork uses the Unstructured API for document processing, which requires specialized configuration and handling.
+
+**Fix:**
+- Added API key management in `backend/onyx/file_processing/unstructured.py`
+- Integrated with document extraction pipeline in `extract_file_text.py`
+- Configured environment variables in docker-compose files
+
+**Tests:**
+- API Key Management: `backend/tests/unit/file_processing/test_unstructured.py`
+- Text Extraction: `backend/tests/unit/file_processing/test_unstructured_text_extraction.py`
+- Document Pipeline Integration: `backend/tests/unit/file_processing/test_extract_file_text.py`
+
 ## How to Add New Regression Tests
 
 When making fork-specific fixes:

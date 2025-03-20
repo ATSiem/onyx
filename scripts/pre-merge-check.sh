@@ -13,6 +13,11 @@ echo "Running backend regression tests..."
 python -m pytest tests/unit/onyx/llm/test_llm_provider_options.py -v
 python -m pytest tests/unit/test_email_invites.py -v
 
+# Run Unstructured API integration check
+echo "Running Unstructured API integration check..."
+cd "$(git rev-parse --show-toplevel)"
+./scripts/check_unstructured_integration.sh
+
 # Run frontend regression tests
 cd "$(git rev-parse --show-toplevel)/web"
 echo "Running frontend regression tests..."
