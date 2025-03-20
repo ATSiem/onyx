@@ -23,8 +23,9 @@ To run the regression tests manually:
 - Backend: Added filter in `llm_provider_options.py` to exclude these models from options
 
 **Tests:** 
-- Frontend: `web/src/components/llm/LLMSelector.test.tsx`
 - Backend: `backend/tests/unit/onyx/llm/test_llm_provider_options.py`
+
+**Note:** The frontend filtering is present in the component, but frontend tests are currently disabled.
 
 ### 2. Email Invite Functionality in Single-Tenant Mode
 

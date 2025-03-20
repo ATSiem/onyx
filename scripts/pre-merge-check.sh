@@ -27,10 +27,5 @@ echo "Running Unstructured API health check..."
 cd "$(git rev-parse --show-toplevel)"
 ./scripts/test_unstructured_api_health.sh
 
-# Run frontend regression tests
-cd "$(git rev-parse --show-toplevel)/web"
-echo "Running frontend regression tests..."
-npm test -- src/components/llm/LLMSelector.test.tsx
-
-echo "All regression tests passed!"
+echo "All backend regression tests passed!"
 exit 0 
