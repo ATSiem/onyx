@@ -23,6 +23,12 @@ echo "Running Unstructured API health check..."
 cd "$(git rev-parse --show-toplevel)"
 ./scripts/test_unstructured_api_health.sh
 
+# Run Zulip connector regression tests
+# NOTE: These tests are currently documented but not run due to dependency issues
+# TODO: Add these tests back when the dependency issues are resolved
+echo "NOTE: Zulip connector regression tests need to be properly set up"
+echo "See tests/unit/connectors/zulip/test_zulip_metadata.py for the test cases"
+
 # Run frontend regression tests
 cd "$(git rev-parse --show-toplevel)/web"
 echo "Running frontend regression tests..."

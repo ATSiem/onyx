@@ -52,6 +52,23 @@ To run the regression tests manually:
 - Code Integration Check: `scripts/check_unstructured_integration.sh`
 - API Health Check: `scripts/test_unstructured_api_health.sh` - Verifies a running Unstructured API can process documents by uploading a test text file and confirming the response
 
+### 4. Zulip Connector Enhancements
+
+**Issue:** The Zulip connector needed improvements for URL handling, metadata formatting, and timestamp handling.
+
+**Fix:**
+- Added URL normalization in the connector initialization
+- Ensured all metadata values are converted to strings
+- Properly handled None values for last_edit_timestamp
+
+**Tests:**
+- `backend/tests/unit/connectors/zulip/test_zulip_metadata.py` (Test file created but tests are currently disabled due to dependency issues)
+
+**Note:** These tests are currently documented but not executed in the automated test suite due to dependency requirements. The test file contains three test cases that validate:
+1. URL normalization
+2. Metadata string conversion
+3. Proper handling of None timestamps
+
 ## How to Add New Regression Tests
 
 When making fork-specific fixes:
