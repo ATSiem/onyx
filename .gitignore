@@ -26,5 +26,8 @@ local-config/
 deployment/data/certbot/
 deployment/data/sslcerts/
 
+# backups
+/db-backups/
+
 # others
 *.sw?
