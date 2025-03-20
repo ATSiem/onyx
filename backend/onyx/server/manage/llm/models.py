@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 class TestLLMRequest(BaseModel):
     # provider level
+    name: str | None = None
     provider: str
     api_key: str | None = None
     api_base: str | None = None
@@ -34,6 +35,8 @@ class LLMProviderDescriptor(BaseModel):
     default_model_name: str
     fast_default_model_name: str | None
     is_default_provider: bool | None
+    is_default_vision_provider: bool | None
+    default_vision_model: str | None
     display_model_names: list[str] | None
 
     @classmethod
@@ -46,11 +49,10 @@ class LLMProviderDescriptor(BaseModel):
             default_model_name=llm_provider_model.default_model_name,
             fast_default_model_name=llm_provider_model.fast_default_model_name,
             is_default_provider=llm_provider_model.is_default_provider,
-            model_names=(
-                llm_provider_model.model_names
-                or fetch_models_for_provider(llm_provider_model.provider)
-                or [llm_provider_model.default_model_name]
-            ),
+            is_default_vision_provider=llm_provider_model.is_default_vision_provider,
+            default_vision_model=llm_provider_model.default_vision_model,
+            model_names=llm_provider_model.model_names
+            or fetch_models_for_provider(llm_provider_model.provider),
             display_model_names=llm_provider_model.display_model_names,
         )
 
@@ -68,21 +70,26 @@ class LLMProvider(BaseModel):
     groups: list[int] = Field(default_factory=list)
     display_model_names: list[str] | None = None
     deployment_name: str | None = None
+    default_vision_model: str | None = None
 
 
 class LLMProviderUpsertRequest(LLMProvider):
     # should only be used for a "custom" provider
     # for default providers, the built-in model names are used
     model_names: list[str] | None = None
+    api_key_changed: bool = False
 
 
-class FullLLMProvider(LLMProvider):
+class LLMProviderView(LLMProvider):
+    """Stripped down representation of LLMProvider for display / limited access info only"""
+
     id: int
     is_default_provider: bool | None = None
+    is_default_vision_provider: bool | None = None
     model_names: list[str]
 
     @classmethod
-    def from_model(cls, llm_provider_model: "LLMProviderModel") -> "FullLLMProvider":
+    def from_model(cls, llm_provider_model: "LLMProviderModel") -> "LLMProviderView":
         return cls(
             id=llm_provider_model.id,
             name=llm_provider_model.name,
@@ -94,6 +101,8 @@ class FullLLMProvider(LLMProvider):
             default_model_name=llm_provider_model.default_model_name,
             fast_default_model_name=llm_provider_model.fast_default_model_name,
             is_default_provider=llm_provider_model.is_default_provider,
+            is_default_vision_provider=llm_provider_model.is_default_vision_provider,
+            default_vision_model=llm_provider_model.default_vision_model,
             display_model_names=llm_provider_model.display_model_names,
             model_names=(
                 llm_provider_model.model_names
@@ -104,3 +113,9 @@ class FullLLMProvider(LLMProvider):
             groups=[group.id for group in llm_provider_model.groups],
             deployment_name=llm_provider_model.deployment_name,
         )
+
+
+class VisionProviderResponse(LLMProviderView):
+    """Response model for vision providers endpoint, including vision-specific fields."""
+
+    vision_models: list[str]

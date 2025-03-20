@@ -6,6 +6,7 @@ from itertools import islice
 from typing import Any
 from typing import Literal
 
+import psutil
 from celery import shared_task
 from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 from onyx.background.celery.apps.app_base import task_logger
 from onyx.background.celery.celery_redis import celery_get_queue_length
 from onyx.background.celery.celery_redis import celery_get_unacked_task_ids
+from onyx.background.celery.memory_monitoring import emit_process_memory
 from onyx.configs.constants import CELERY_GENERIC_BEAT_LOCK_TIMEOUT
 from onyx.configs.constants import ONYX_CLOUD_TENANT_ID
 from onyx.configs.constants import OnyxCeleryQueues
@@ -26,7 +28,8 @@ from onyx.configs.constants import OnyxCeleryTask
 from onyx.configs.constants import OnyxRedisLocks
 from onyx.db.engine import get_all_tenant_ids
 from onyx.db.engine import get_db_current_time
-from onyx.db.engine import get_session_with_tenant
+from onyx.db.engine import get_session_with_current_tenant
+from onyx.db.engine import get_session_with_shared_schema
 from onyx.db.enums import IndexingStatus
 from onyx.db.enums import SyncStatus
 from onyx.db.enums import SyncType
@@ -38,10 +41,11 @@ from onyx.db.models import UserGroup
 from onyx.db.search_settings import get_active_search_settings_list
 from onyx.redis.redis_pool import get_redis_client
 from onyx.redis.redis_pool import redis_lock_dump
+from onyx.utils.logger import is_running_in_container
 from onyx.utils.telemetry import optional_telemetry
 from onyx.utils.telemetry import RecordType
+from shared_configs.configs import MULTI_TENANT
 from shared_configs.contextvars import CURRENT_TENANT_ID_CONTEXTVAR
-
 
 _MONITORING_SOFT_TIME_LIMIT = 60 * 5  # 5 minutes
 _MONITORING_TIME_LIMIT = _MONITORING_SOFT_TIME_LIMIT + 60  # 6 minutes
@@ -91,7 +95,7 @@ class Metric(BaseModel):
         }
         task_logger.info(json.dumps(data))
 
-    def emit(self, tenant_id: str | None) -> None:
+    def emit(self, tenant_id: str) -> None:
         # Convert value to appropriate type based on the input value
         bool_value = None
         float_value = None
@@ -656,7 +660,7 @@ def build_job_id(
     queue=OnyxCeleryQueues.MONITORING,
     bind=True,
 )
-def monitor_background_processes(self: Task, *, tenant_id: str | None) -> None:
+def monitor_background_processes(self: Task, *, tenant_id: str) -> None:
     """Collect and emit metrics about background processes.
     This task runs periodically to gather metrics about:
     - Queue lengths for different Celery queues
@@ -668,7 +672,7 @@ def monitor_background_processes(self: Task, *, tenant_id: str | None) -> None:
         CURRENT_TENANT_ID_CONTEXTVAR.set(tenant_id)
 
     task_logger.info("Starting background monitoring")
-    r = get_redis_client(tenant_id=tenant_id)
+    r = get_redis_client()
 
     lock_monitoring: RedisLock = r.lock(
         OnyxRedisLocks.MONITOR_BACKGROUND_PROCESSES_LOCK,
@@ -683,7 +687,7 @@ def monitor_background_processes(self: Task, *, tenant_id: str | None) -> None:
     try:
         # Get Redis client for Celery broker
         redis_celery = self.app.broker_connection().channel().client  # type: ignore
-        redis_std = get_redis_client(tenant_id=tenant_id)
+        redis_std = get_redis_client()
 
         # Define metric collection functions and their dependencies
         metric_functions: list[Callable[[], list[Metric]]] = [
@@ -693,7 +697,7 @@ def monitor_background_processes(self: Task, *, tenant_id: str | None) -> None:
         ]
 
         # Collect and log each metric
-        with get_session_with_tenant(tenant_id) as db_session:
+        with get_session_with_current_tenant() as db_session:
             for metric_fn in metric_functions:
                 metrics = metric_fn()
                 for metric in metrics:
@@ -771,12 +775,11 @@ def cloud_check_alembic() -> bool | None:
             if tenant_id is None:
                 continue
 
-            with get_session_with_tenant(tenant_id=None) as session:
+            with get_session_with_shared_schema() as session:
                 try:
                     result = session.execute(
                         text(f'SELECT * FROM "{tenant_id}".alembic_version LIMIT 1')
                     )
-
                     result_scalar: str | None = result.scalar_one_or_none()
                     if result_scalar is None:
                         raise ValueError("Alembic version should not be None.")
@@ -865,7 +868,7 @@ def cloud_monitor_celery_queues(
 
 
 @shared_task(name=OnyxCeleryTask.MONITOR_CELERY_QUEUES, ignore_result=True, bind=True)
-def monitor_celery_queues(self: Task, *, tenant_id: str | None) -> None:
+def monitor_celery_queues(self: Task, *, tenant_id: str) -> None:
     return monitor_celery_queues_helper(self)
 
 
@@ -905,3 +908,93 @@ def monitor_celery_queues_helper(
         f"external_group_sync={n_external_group_sync} "
         f"permissions_upsert={n_permissions_upsert} "
     )
+
+
+"""Memory monitoring"""
+
+
+def _get_cmdline_for_process(process: psutil.Process) -> str | None:
+    try:
+        return " ".join(process.cmdline())
+    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+        return None
+
+
+@shared_task(
+    name=OnyxCeleryTask.MONITOR_PROCESS_MEMORY,
+    ignore_result=True,
+    soft_time_limit=_MONITORING_SOFT_TIME_LIMIT,
+    time_limit=_MONITORING_TIME_LIMIT,
+    queue=OnyxCeleryQueues.MONITORING,
+    bind=True,
+)
+def monitor_process_memory(self: Task, *, tenant_id: str) -> None:
+    """
+    Task to monitor memory usage of supervisor-managed processes.
+    This periodically checks the memory usage of processes and logs information
+    in a standardized format.
+
+    The task looks for processes managed by supervisor and logs their
+    memory usage statistics. This is useful for monitoring memory consumption
+    over time and identifying potential memory leaks.
+    """
+    # don't run this task in multi-tenant mode, have other, better means of monitoring
+    if MULTI_TENANT:
+        return
+
+    # Skip memory monitoring if not in container
+    if not is_running_in_container():
+        return
+
+    try:
+        # Get all supervisor-managed processes
+        supervisor_processes: dict[int, str] = {}
+
+        # Map cmd line elements to more readable process names
+        process_type_mapping = {
+            "--hostname=primary": "primary",
+            "--hostname=light": "light",
+            "--hostname=heavy": "heavy",
+            "--hostname=indexing": "indexing",
+            "--hostname=monitoring": "monitoring",
+            "beat": "beat",
+            "slack/listener.py": "slack",
+        }
+
+        # Find all python processes that are likely celery workers
+        for proc in psutil.process_iter():
+            cmdline = _get_cmdline_for_process(proc)
+            if not cmdline:
+                continue
+
+            # Match supervisor-managed processes
+            for process_name, process_type in process_type_mapping.items():
+                if process_name in cmdline:
+                    if process_type in supervisor_processes.values():
+                        task_logger.error(
+                            f"Duplicate process type for type {process_type} "
+                            f"with cmd {cmdline} with pid={proc.pid}."
+                        )
+                        continue
+
+                    supervisor_processes[proc.pid] = process_type
+                    break
+
+        if len(supervisor_processes) != len(process_type_mapping):
+            task_logger.error(
+                "Missing processes: "
+                f"{set(process_type_mapping.keys()).symmetric_difference(supervisor_processes.values())}"
+            )
+
+        # Log memory usage for each process
+        for pid, process_type in supervisor_processes.items():
+            try:
+                emit_process_memory(pid, process_type, {})
+            except psutil.NoSuchProcess:
+                # Process may have terminated since we obtained the list
+                continue
+            except Exception as e:
+                task_logger.exception(f"Error monitoring process {pid}: {str(e)}")
+
+    except Exception:
+        task_logger.exception("Error in monitor_process_memory task")

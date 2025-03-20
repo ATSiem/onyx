@@ -61,7 +61,7 @@ import {
 import { buildImgUrl } from "@/app/chat/files/images/utils";
 import { useAssistants } from "@/components/context/AssistantsContext";
 import { debounce } from "lodash";
-import { FullLLMProvider } from "../configuration/llm/interfaces";
+import { LLMProviderView } from "../configuration/llm/interfaces";
 import StarterMessagesList from "./StarterMessageList";
 
 import { Switch, SwitchField } from "@/components/ui/switch";
@@ -113,7 +113,6 @@ export function AssistantEditor({
   documentSets,
   user,
   defaultPublic,
-  redirectType,
   llmProviders,
   tools,
   shouldAddAssistantToUserPreferences,
@@ -124,8 +123,7 @@ export function AssistantEditor({
   documentSets: DocumentSet[];
   user: User | null;
   defaultPublic: boolean;
-  redirectType: SuccessfulPersonaUpdateRedirectType;
-  llmProviders: FullLLMProvider[];
+  llmProviders: LLMProviderView[];
   tools: ToolSnapshot[];
   shouldAddAssistantToUserPreferences?: boolean;
   admin?: boolean;
@@ -502,7 +500,7 @@ export function AssistantEditor({
             )
             .map((message: { message: string; name?: string }) => ({
               message: message.message,
-              name: message.name || message.message,
+              name: message.message,
             }));
 
           // don't set groups if marked as public
@@ -1097,8 +1095,7 @@ export function AssistantEditor({
 
                       {values.is_public ? (
                         <p className="text-sm text-text-dark">
-                          Anyone from your organization can view and use this
-                          assistant
+                          Anyone from your team can view and use this assistant
                         </p>
                       ) : (
                         <>

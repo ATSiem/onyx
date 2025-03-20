@@ -11,14 +11,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from onyx.auth.users import current_admin_user
-from onyx.auth.users import current_chat_accesssible_user
+from onyx.auth.users import current_chat_accessible_user
 from onyx.auth.users import current_curator_or_admin_user
 from onyx.auth.users import current_limited_user
 from onyx.auth.users import current_user
 from onyx.configs.constants import FileOrigin
 from onyx.configs.constants import MilestoneRecordType
 from onyx.configs.constants import NotificationType
-from onyx.db.engine import get_current_tenant_id
 from onyx.db.engine import get_session
 from onyx.db.models import StarterMessageModel as StarterMessage
 from onyx.db.models import User
@@ -56,6 +55,7 @@ from onyx.server.models import DisplayPriorityRequest
 from onyx.tools.utils import is_image_generation_available
 from onyx.utils.logger import setup_logger
 from onyx.utils.telemetry import create_milestone_and_report
+from shared_configs.contextvars import get_current_tenant_id
 
 logger = setup_logger()
 
@@ -201,8 +201,9 @@ def create_persona(
     persona_upsert_request: PersonaUpsertRequest,
     user: User | None = Depends(current_user),
     db_session: Session = Depends(get_session),
-    tenant_id: str | None = Depends(get_current_tenant_id),
 ) -> PersonaSnapshot:
+    tenant_id = get_current_tenant_id()
+
     prompt_id = (
         persona_upsert_request.prompt_ids[0]
         if persona_upsert_request.prompt_ids
@@ -389,7 +390,7 @@ def get_image_generation_tool(
 
 @basic_router.get("")
 def list_personas(
-    user: User | None = Depends(current_chat_accesssible_user),
+    user: User | None = Depends(current_chat_accessible_user),
     db_session: Session = Depends(get_session),
     include_deleted: bool = False,
     persona_ids: list[int] = Query(None),

@@ -70,6 +70,7 @@ export interface ChatSession {
   name: string;
   persona_id: number;
   time_created: string;
+  time_updated: string;
   shared_status: ChatSessionSharedStatus;
   folder_id: number | null;
   current_alternate_model: string;
@@ -103,6 +104,7 @@ export interface Message {
   overridden_model?: string;
   stopReason?: StreamStopReason | null;
   sub_questions?: SubQuestionDetail[] | null;
+  is_agentic?: boolean | null;
 
   // Streaming only
   second_level_generating?: boolean;
@@ -122,6 +124,7 @@ export interface BackendChatSession {
   persona_icon_shape: number | null;
   messages: BackendMessage[];
   time_created: string;
+  time_updated: string;
   shared_status: ChatSessionSharedStatus;
   current_temperature_override: number | null;
   current_alternate_model?: string;
@@ -148,11 +151,21 @@ export interface BackendMessage {
   comments: any;
   parentMessageId: number | null;
   refined_answer_improvement: boolean | null;
+  is_agentic: boolean | null;
 }
 
 export interface MessageResponseIDInfo {
   user_message_id: number | null;
   reserved_assistant_message_id: number;
+}
+
+export interface AgentMessageIDInfo {
+  level: number;
+  message_id: number;
+}
+
+export interface AgenticMessageResponseIDInfo {
+  agentic_message_ids: AgentMessageIDInfo[];
 }
 
 export interface DocumentsResponse {

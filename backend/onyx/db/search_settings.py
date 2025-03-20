@@ -13,7 +13,8 @@ from onyx.configs.model_configs import OLD_DEFAULT_DOCUMENT_ENCODER_MODEL
 from onyx.configs.model_configs import OLD_DEFAULT_MODEL_DOC_EMBEDDING_DIM
 from onyx.configs.model_configs import OLD_DEFAULT_MODEL_NORMALIZE_EMBEDDINGS
 from onyx.context.search.models import SavedSearchSettings
-from onyx.db.engine import get_session_with_default_tenant
+from onyx.db.engine import get_session_with_current_tenant
+from onyx.db.enums import EmbeddingPrecision
 from onyx.db.llm import fetch_embedding_provider
 from onyx.db.models import CloudEmbeddingProvider
 from onyx.db.models import IndexAttempt
@@ -59,12 +60,15 @@ def create_search_settings(
         index_name=search_settings.index_name,
         provider_type=search_settings.provider_type,
         multipass_indexing=search_settings.multipass_indexing,
+        embedding_precision=search_settings.embedding_precision,
+        reduced_dimension=search_settings.reduced_dimension,
         multilingual_expansion=search_settings.multilingual_expansion,
         disable_rerank_for_streaming=search_settings.disable_rerank_for_streaming,
         rerank_model_name=search_settings.rerank_model_name,
         rerank_provider_type=search_settings.rerank_provider_type,
         rerank_api_key=search_settings.rerank_api_key,
         num_rerank=search_settings.num_rerank,
+        background_reindex_enabled=search_settings.background_reindex_enabled,
     )
 
     db_session.add(embedding_model)
@@ -189,7 +193,7 @@ def get_all_search_settings(db_session: Session) -> list[SearchSettings]:
 
 def get_multilingual_expansion(db_session: Session | None = None) -> list[str]:
     if db_session is None:
-        with get_session_with_default_tenant() as db_session:
+        with get_session_with_current_tenant() as db_session:
             search_settings = get_current_search_settings(db_session)
     else:
         search_settings = get_current_search_settings(db_session)
@@ -305,6 +309,7 @@ def get_old_default_embedding_model() -> IndexingSetting:
         model_dim=(
             DOC_EMBEDDING_DIM if is_overridden else OLD_DEFAULT_MODEL_DOC_EMBEDDING_DIM
         ),
+        embedding_precision=(EmbeddingPrecision.FLOAT),
         normalize=(
             NORMALIZE_EMBEDDINGS
             if is_overridden
@@ -322,6 +327,7 @@ def get_new_default_embedding_model() -> IndexingSetting:
     return IndexingSetting(
         model_name=DOCUMENT_ENCODER_MODEL,
         model_dim=DOC_EMBEDDING_DIM,
+        embedding_precision=(EmbeddingPrecision.FLOAT),
         normalize=NORMALIZE_EMBEDDINGS,
         query_prefix=ASYM_QUERY_PREFIX,
         passage_prefix=ASYM_PASSAGE_PREFIX,

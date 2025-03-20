@@ -51,7 +51,7 @@ from onyx.server.documents.cc_pair import router as cc_pair_router
 from onyx.server.documents.connector import router as connector_router
 from onyx.server.documents.credential import router as credential_router
 from onyx.server.documents.document import router as document_router
-from onyx.server.documents.standard_oauth import router as oauth_router
+from onyx.server.documents.standard_oauth import router as standard_oauth_router
 from onyx.server.features.document_set.api import router as document_set_router
 from onyx.server.features.folder.api import router as folder_router
 from onyx.server.features.input_prompt.api import (
@@ -61,6 +61,7 @@ from onyx.server.features.input_prompt.api import (
     basic_router as input_prompt_router,
 )
 from onyx.server.features.notifications.api import router as notification_router
+from onyx.server.features.password.api import router as password_router
 from onyx.server.features.persona.api import admin_router as admin_persona_router
 from onyx.server.features.persona.api import basic_router as persona_router
 from onyx.server.features.tool.api import admin_router as admin_tool_router
@@ -218,7 +219,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         # If we are multi-tenant, we need to only set up initial public tables
         with Session(engine) as db_session:
-            setup_onyx(db_session, None)
+            setup_onyx(db_session, POSTGRES_DEFAULT_SCHEMA)
     else:
         setup_multitenant_onyx()
 
@@ -232,6 +233,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await setup_auth_limiter()
 
     yield
+
+    SqlEngine.reset_engine()
 
     if AUTH_RATE_LIMITING_ENABLED:
         await close_auth_limiter()
@@ -281,6 +284,7 @@ def get_application() -> FastAPI:
         status.HTTP_500_INTERNAL_SERVER_ERROR, log_http_error
     )
 
+    include_router_with_global_prefix_prepended(application, password_router)
     include_router_with_global_prefix_prepended(application, chat_router)
     include_router_with_global_prefix_prepended(application, query_router)
     include_router_with_global_prefix_prepended(application, document_router)
@@ -321,7 +325,7 @@ def get_application() -> FastAPI:
     )
     include_router_with_global_prefix_prepended(application, long_term_logs_router)
     include_router_with_global_prefix_prepended(application, api_key_router)
-    include_router_with_global_prefix_prepended(application, oauth_router)
+    include_router_with_global_prefix_prepended(application, standard_oauth_router)
 
     if AUTH_TYPE == AuthType.DISABLED:
         # Server logs this during auth setup verification step

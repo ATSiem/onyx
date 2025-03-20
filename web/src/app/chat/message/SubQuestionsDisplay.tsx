@@ -16,14 +16,15 @@ import ReactMarkdown from "react-markdown";
 import { MemoizedAnchor } from "./MemoizedTextComponents";
 import { MemoizedParagraph } from "./MemoizedTextComponents";
 import { extractCodeText, preprocessLaTeX } from "./codeUtils";
-
+import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import remarkGfm from "remark-gfm";
 import { CodeBlock } from "./CodeBlock";
 import { CheckIcon, ChevronDown } from "lucide-react";
 import { PHASE_MIN_MS, useStreamingMessages } from "./StreamingMessages";
 import { CirclingArrowIcon } from "@/components/icons/icons";
+import { handleCopy } from "./copyingUtils";
+import { transformLinkUri } from "@/lib/utils";
 
 export const StatusIndicator = ({ status }: { status: ToggleState }) => {
   return (
@@ -175,6 +176,7 @@ const SubQuestionDisplay: React.FC<{
       <MemoizedAnchor
         updatePresentingDocument={setPresentingDocument!}
         docs={subQuestion?.context_docs?.top_documents || documents}
+        href={props.href}
       >
         {props.children}
       </MemoizedAnchor>
@@ -291,13 +293,15 @@ const SubQuestionDisplay: React.FC<{
     }
   }, [currentlyClosed]);
 
+  const analysisRef = useRef<HTMLDivElement>(null);
   const renderedMarkdown = useMemo(() => {
     return (
       <ReactMarkdown
-        className="prose max-w-full text-base"
+        className="prose dark:prose-invert max-w-full text-base"
         components={markdownComponents}
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
+        urlTransform={transformLinkUri}
       >
         {finalContent}
       </ReactMarkdown>
@@ -340,7 +344,7 @@ const SubQuestionDisplay: React.FC<{
               {subQuestion?.question || temporaryDisplay?.question}
             </div>
             <ChevronDown
-              className={`mt-0.5 text-text-darker transition-transform duration-500 ease-in-out ${
+              className={`mt-0.5 flex-none text-text-darker transition-transform duration-500 ease-in-out ${
                 toggled ? "" : "-rotate-90"
               }`}
               size={20}
@@ -427,7 +431,11 @@ const SubQuestionDisplay: React.FC<{
                           />
                         </div>
                         {analysisToggled && (
-                          <div className="flex flex-wrap gap-2">
+                          <div
+                            ref={analysisRef}
+                            onCopy={(e) => handleCopy(e, analysisRef)}
+                            className="flex flex-wrap gap-2"
+                          >
                             {renderedMarkdown}
                           </div>
                         )}
@@ -632,9 +640,7 @@ const SubQuestionsDisplay: React.FC<SubQuestionsDisplayProps> = ({
         }
       `}</style>
       <div className="relative">
-        {/* {subQuestions.map((subQuestion, index) => ( */}
         {memoizedSubQuestions.map((subQuestion, index) => (
-          // {dynamicSubQuestions.map((subQuestion, index) => (
           <SubQuestionDisplay
             currentlyOpen={
               currentlyOpenQuestion?.level === subQuestion.level &&

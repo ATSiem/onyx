@@ -23,6 +23,7 @@ logger = setup_logger()
 
 celery_app = Celery(__name__)
 celery_app.config_from_object("onyx.background.celery.configs.light")
+celery_app.Task = app_base.TenantAwareTask  # type: ignore [misc]
 
 
 @signals.task_prerun.connect
@@ -110,5 +111,7 @@ celery_app.autodiscover_tasks(
         "onyx.background.celery.tasks.vespa",
         "onyx.background.celery.tasks.connector_deletion",
         "onyx.background.celery.tasks.doc_permission_syncing",
+        "onyx.background.celery.tasks.indexing",
+        "onyx.background.celery.tasks.tenant_provisioning",
     ]
 )

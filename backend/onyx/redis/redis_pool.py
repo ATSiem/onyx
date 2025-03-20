@@ -28,6 +28,8 @@ from onyx.configs.app_configs import REDIS_SSL_CERT_REQS
 from onyx.configs.constants import FASTAPI_USERS_AUTH_COOKIE_NAME
 from onyx.configs.constants import REDIS_SOCKET_KEEPALIVE_OPTIONS
 from onyx.utils.logger import setup_logger
+from shared_configs.configs import DEFAULT_REDIS_PREFIX
+from shared_configs.contextvars import get_current_tenant_id
 
 logger = setup_logger()
 
@@ -152,15 +154,25 @@ class RedisPool:
             host=REDIS_REPLICA_HOST, ssl=REDIS_SSL
         )
 
-    def get_client(self, tenant_id: str | None) -> Redis:
-        if tenant_id is None:
-            tenant_id = "public"
+    def get_client(self, tenant_id: str) -> Redis:
         return TenantRedis(tenant_id, connection_pool=self._pool)
 
-    def get_replica_client(self, tenant_id: str | None) -> Redis:
-        if tenant_id is None:
-            tenant_id = "public"
+    def get_replica_client(self, tenant_id: str) -> Redis:
         return TenantRedis(tenant_id, connection_pool=self._replica_pool)
+
+    def get_raw_client(self) -> Redis:
+        """
+        Returns a Redis client with direct access to the primary connection pool,
+        without tenant prefixing.
+        """
+        return redis.Redis(connection_pool=self._pool)
+
+    def get_raw_replica_client(self) -> Redis:
+        """
+        Returns a Redis client with direct access to the replica connection pool,
+        without tenant prefixing.
+        """
+        return redis.Redis(connection_pool=self._replica_pool)
 
     @staticmethod
     def create_pool(
@@ -221,12 +233,96 @@ redis_pool = RedisPool()
 # print(value.decode())  # Output: 'value'
 
 
-def get_redis_client(*, tenant_id: str | None) -> Redis:
+def get_redis_client(
+    *,
+    #  This argument will be deprecated in the future
+    tenant_id: str | None = None,
+) -> Redis:
+    """
+    Returns a Redis client with tenant-specific key prefixing.
+
+    This ensures proper data isolation between tenants by automatically
+    prefixing all Redis keys with the tenant ID.
+
+    Use this when working with tenant-specific data that should be
+    isolated from other tenants.
+    """
+    if tenant_id is None:
+        tenant_id = get_current_tenant_id()
+
     return redis_pool.get_client(tenant_id)
 
 
-def get_redis_replica_client(*, tenant_id: str | None) -> Redis:
+def get_redis_replica_client(
+    *,
+    # this argument will be deprecated in the future
+    tenant_id: str | None = None,
+) -> Redis:
+    """
+    Returns a Redis replica client with tenant-specific key prefixing.
+
+    Similar to get_redis_client(), but connects to a read replica when available.
+    This ensures proper data isolation between tenants by automatically
+    prefixing all Redis keys with the tenant ID.
+
+    Use this for read-heavy operations on tenant-specific data.
+    """
+    if tenant_id is None:
+        tenant_id = get_current_tenant_id()
+
     return redis_pool.get_replica_client(tenant_id)
+
+
+def get_shared_redis_client() -> Redis:
+    """
+    Returns a Redis client with a shared namespace prefix.
+
+    Unlike tenant-specific clients, this uses a common prefix for all keys,
+    creating a shared namespace accessible across all tenants.
+
+    Use this for data that should be shared across the application and
+    isn't specific to any individual tenant.
+    """
+    return redis_pool.get_client(DEFAULT_REDIS_PREFIX)
+
+
+def get_shared_redis_replica_client() -> Redis:
+    """
+    Returns a Redis replica client with a shared namespace prefix.
+
+    Similar to get_shared_redis_client(), but connects to a read replica when available.
+    Uses a common prefix for all keys, creating a shared namespace.
+
+    Use this for read-heavy operations on data that should be shared
+    across the application.
+    """
+    return redis_pool.get_replica_client(DEFAULT_REDIS_PREFIX)
+
+
+def get_raw_redis_client() -> Redis:
+    """
+    Returns a Redis client that doesn't apply tenant prefixing to keys.
+
+    Use this only when you need to access Redis directly without tenant isolation
+    or any key prefixing. Typically needed for integrating with external systems
+    or libraries that have inflexible key requirements.
+
+    Warning: Be careful with this client as it bypasses tenant isolation.
+    """
+    return redis_pool.get_raw_client()
+
+
+def get_raw_redis_replica_client() -> Redis:
+    """
+    Returns a Redis replica client that doesn't apply tenant prefixing to keys.
+
+    Similar to get_raw_redis_client(), but connects to a read replica when available.
+    Use this for read-heavy operations that need direct Redis access without
+    tenant isolation or key prefixing.
+
+    Warning: Be careful with this client as it bypasses tenant isolation.
+    """
+    return redis_pool.get_raw_replica_client()
 
 
 SSL_CERT_REQS_MAP = {

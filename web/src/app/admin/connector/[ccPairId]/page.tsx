@@ -43,6 +43,7 @@ import IndexAttemptErrorsModal from "./IndexAttemptErrorsModal";
 import usePaginatedFetch from "@/hooks/usePaginatedFetch";
 import { IndexAttemptSnapshot } from "@/lib/types";
 import { Spinner } from "@/components/Spinner";
+import { Callout } from "@/components/ui/callout";
 
 // synchronize these validations with the SQLAlchemy connector class until we have a
 // centralized schema for both frontend and backend
@@ -363,6 +364,7 @@ function Main({ ccPairId }: { ccPairId: number }) {
           <div className="ml-auto flex gap-x-2">
             <ReIndexButton
               ccPairId={ccPair.id}
+              ccPairStatus={ccPair.status}
               connectorId={ccPair.connector.id}
               credentialId={ccPair.credential.id}
               isDisabled={
@@ -370,7 +372,6 @@ function Main({ ccPairId }: { ccPairId: number }) {
                 ccPair.status === ConnectorCredentialPairStatus.PAUSED
               }
               isIndexing={ccPair.indexing}
-              isDeleting={isDeleting}
             />
 
             {!isDeleting && <ModifyStatusButtonCluster ccPair={ccPair} />}
@@ -379,8 +380,7 @@ function Main({ ccPairId }: { ccPairId: number }) {
       </div>
       <CCPairStatus
         status={ccPair.last_index_attempt_status || "not_started"}
-        disabled={ccPair.status === ConnectorCredentialPairStatus.PAUSED}
-        isDeleting={isDeleting}
+        ccPairStatus={ccPair.status}
       />
       <div className="text-sm mt-1">
         Creator:{" "}
@@ -424,6 +424,16 @@ function Main({ ccPairId }: { ccPairId: number }) {
             />
           </>
         )}
+
+      {ccPair.status === ConnectorCredentialPairStatus.INVALID && (
+        <div className="mt-2">
+          <Callout type="warning" title="Invalid Connector State">
+            This connector is in an invalid state. Please update your
+            credentials or create a new connector before re-indexing.
+          </Callout>
+        </div>
+      )}
+
       <Separator />
       <ConfigDisplay
         connectorSpecificConfig={ccPair.connector.connector_specific_config}
@@ -445,15 +455,15 @@ function Main({ ccPairId }: { ccPairId: number }) {
           <Title>Indexing Attempts</Title>
         </div>
         {indexAttemptErrors && indexAttemptErrors.total_items > 0 && (
-          <Alert className="border-alert bg-yellow-50 my-2">
-            <AlertCircle className="h-4 w-4 text-yellow-700" />
-            <AlertTitle className="text-yellow-950 font-semibold">
+          <Alert className="border-alert bg-yellow-50 dark:bg-yellow-800 my-2">
+            <AlertCircle className="h-4 w-4 text-yellow-700 dark:text-yellow-500" />
+            <AlertTitle className="text-yellow-950 dark:text-yellow-200 font-semibold">
               Some documents failed to index
             </AlertTitle>
-            <AlertDescription className="text-yellow-900">
+            <AlertDescription className="text-yellow-900 dark:text-yellow-300">
               {isResolvingErrors ? (
                 <span>
-                  <span className="text-sm text-yellow-700 animate-pulse">
+                  <span className="text-sm text-yellow-700 dark:text-yellow-400 da animate-pulse">
                     Resolving failures
                   </span>
                 </span>
@@ -461,7 +471,7 @@ function Main({ ccPairId }: { ccPairId: number }) {
                 <>
                   We ran into some issues while processing some documents.{" "}
                   <b
-                    className="text-link cursor-pointer"
+                    className="text-link cursor-pointer dark:text-blue-300"
                     onClick={() => setShowIndexAttemptErrors(true)}
                   >
                     View details.

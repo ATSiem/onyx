@@ -4,6 +4,8 @@ import React, { createContext, useContext, useState, useEffect } from "react";
 import { User, UserRole } from "@/lib/types";
 import { getCurrentUser } from "@/lib/user";
 import { usePostHog } from "posthog-js/react";
+import { CombinedSettings } from "@/app/admin/settings/interfaces";
+import { SettingsContext } from "../settings/SettingsProvider";
 
 interface UserContextType {
   user: User | null;
@@ -11,7 +13,7 @@ interface UserContextType {
   isCurator: boolean;
   refreshUser: () => Promise<void>;
   isCloudSuperuser: boolean;
-  updateUserAutoScroll: (autoScroll: boolean | null) => Promise<void>;
+  updateUserAutoScroll: (autoScroll: boolean) => Promise<void>;
   updateUserShortcuts: (enabled: boolean) => Promise<void>;
   toggleAssistantPinnedStatus: (
     currentPinnedAssistantIDs: number[],
@@ -26,13 +28,46 @@ const UserContext = createContext<UserContextType | undefined>(undefined);
 export function UserProvider({
   children,
   user,
+  settings,
 }: {
   children: React.ReactNode;
   user: User | null;
+  settings: CombinedSettings;
 }) {
-  const [upToDateUser, setUpToDateUser] = useState<User | null>(user);
-
+  const updatedSettings = useContext(SettingsContext);
   const posthog = usePostHog();
+
+  // For auto_scroll and temperature_override_enabled:
+  // - If user has a preference set, use that
+  // - Otherwise, use the workspace setting if available
+  function mergeUserPreferences(
+    currentUser: User | null,
+    currentSettings: CombinedSettings | null
+  ): User | null {
+    if (!currentUser) return null;
+    return {
+      ...currentUser,
+      preferences: {
+        ...currentUser.preferences,
+        auto_scroll:
+          currentUser.preferences?.auto_scroll ??
+          currentSettings?.settings?.auto_scroll ??
+          false,
+        temperature_override_enabled:
+          currentUser.preferences?.temperature_override_enabled ??
+          currentSettings?.settings?.temperature_override_enabled ??
+          false,
+      },
+    };
+  }
+
+  const [upToDateUser, setUpToDateUser] = useState<User | null>(
+    mergeUserPreferences(user, settings)
+  );
+
+  useEffect(() => {
+    setUpToDateUser(mergeUserPreferences(user, updatedSettings));
+  }, [user, updatedSettings]);
 
   useEffect(() => {
     if (!posthog) return;
@@ -41,8 +76,8 @@ export function UserProvider({
       const identifyData: Record<string, any> = {
         email: user.email,
       };
-      if (user.organization_name) {
-        identifyData.organization_name = user.organization_name;
+      if (user.team_name) {
+        identifyData.team_name = user.team_name;
       }
       posthog.identify(user.id, identifyData);
     } else {
@@ -128,7 +163,7 @@ export function UserProvider({
     }
   };
 
-  const updateUserAutoScroll = async (autoScroll: boolean | null) => {
+  const updateUserAutoScroll = async (autoScroll: boolean) => {
     try {
       const response = await fetch("/api/auto-scroll", {
         method: "PATCH",

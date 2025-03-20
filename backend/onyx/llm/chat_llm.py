@@ -167,7 +167,7 @@ def _convert_delta_to_message_chunk(
     stop_reason: str | None = None,
 ) -> BaseMessageChunk:
     """Adapted from langchain_community.chat_models.litellm._convert_delta_to_message_chunk"""
-    role = _dict.get("role") or (_base_msg_to_role(curr_msg) if curr_msg else None)
+    role = _dict.get("role") or (_base_msg_to_role(curr_msg) if curr_msg else "unknown")
     content = _dict.get("content") or ""
     additional_kwargs = {}
     if _dict.get("function_call"):
@@ -402,6 +402,7 @@ class DefaultMultiLLM(LLM):
         stream: bool,
         structured_response_format: dict | None = None,
         timeout_override: int | None = None,
+        max_tokens: int | None = None,
     ) -> litellm.ModelResponse | litellm.CustomStreamWrapper:
         # litellm doesn't accept LangChain BaseMessage objects, so we need to convert them
         # to a dict representation
@@ -409,10 +410,6 @@ class DefaultMultiLLM(LLM):
         self._record_call(processed_prompt)
 
         try:
-            print(
-                "model is",
-                f"{self.config.model_provider}/{self.config.deployment_name or self.config.model_name}",
-            )
             return litellm.completion(
                 mock_response=MOCK_LLM_RESPONSE,
                 # model choice
@@ -433,12 +430,23 @@ class DefaultMultiLLM(LLM):
                 # model params
                 temperature=0,
                 timeout=timeout_override or self._timeout,
+                max_tokens=max_tokens,
                 # For now, we don't support parallel tool calls
                 # NOTE: we can't pass this in if tools are not specified
                 # or else OpenAI throws an error
                 **(
                     {"parallel_tool_calls": False}
-                    if tools and self.config.model_name != "o3-mini"
+                    if tools
+                    and self.config.model_name
+                    not in [
+                        "o3-mini",
+                        "o3-preview",
+                        "o1",
+                        "o1-preview",
+                        "o1-mini",
+                        "o1-mini-2024-09-12",
+                        "o3-mini-2025-01-31",
+                    ]
                     else {}
                 ),  # TODO: remove once LITELLM has patched
                 **(
@@ -478,6 +486,7 @@ class DefaultMultiLLM(LLM):
         tool_choice: ToolChoiceOptions | None = None,
         structured_response_format: dict | None = None,
         timeout_override: int | None = None,
+        max_tokens: int | None = None,
     ) -> BaseMessage:
         if LOG_DANSWER_MODEL_INTERACTIONS:
             self.log_model_configs()
@@ -491,6 +500,7 @@ class DefaultMultiLLM(LLM):
                 stream=False,
                 structured_response_format=structured_response_format,
                 timeout_override=timeout_override,
+                max_tokens=max_tokens,
             ),
         )
         choice = response.choices[0]
@@ -509,6 +519,7 @@ class DefaultMultiLLM(LLM):
         tool_choice: ToolChoiceOptions | None = None,
         structured_response_format: dict | None = None,
         timeout_override: int | None = None,
+        max_tokens: int | None = None,
     ) -> Iterator[BaseMessage]:
         if LOG_DANSWER_MODEL_INTERACTIONS:
             self.log_model_configs()
@@ -533,6 +544,7 @@ class DefaultMultiLLM(LLM):
                 stream=True,
                 structured_response_format=structured_response_format,
                 timeout_override=timeout_override,
+                max_tokens=max_tokens,
             ),
         )
         try:

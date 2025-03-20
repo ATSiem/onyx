@@ -15,21 +15,27 @@ from onyx.background.indexing.memory_tracer import MemoryTracer
 from onyx.configs.app_configs import INDEX_BATCH_SIZE
 from onyx.configs.app_configs import INDEXING_SIZE_WARNING_THRESHOLD
 from onyx.configs.app_configs import INDEXING_TRACER_INTERVAL
+from onyx.configs.app_configs import INTEGRATION_TESTS_MODE
 from onyx.configs.app_configs import LEAVE_CONNECTOR_ACTIVE_ON_INITIALIZATION_FAILURE
 from onyx.configs.app_configs import POLL_CONNECTOR_OFFSET
 from onyx.configs.constants import DocumentSource
 from onyx.configs.constants import MilestoneRecordType
 from onyx.connectors.connector_runner import ConnectorRunner
+from onyx.connectors.exceptions import ConnectorValidationError
+from onyx.connectors.exceptions import UnexpectedValidationError
 from onyx.connectors.factory import instantiate_connector
-from onyx.connectors.models import ConnectorCheckpoint
 from onyx.connectors.models import ConnectorFailure
 from onyx.connectors.models import Document
 from onyx.connectors.models import IndexAttemptMetadata
+from onyx.connectors.models import TextSection
 from onyx.db.connector_credential_pair import get_connector_credential_pair_from_id
 from onyx.db.connector_credential_pair import get_last_successful_attempt_time
 from onyx.db.connector_credential_pair import update_connector_credential_pair
-from onyx.db.engine import get_session_with_tenant
+from onyx.db.constants import CONNECTOR_VALIDATION_ERROR_MESSAGE_PREFIX
+from onyx.db.engine import get_session_with_current_tenant
 from onyx.db.enums import ConnectorCredentialPairStatus
+from onyx.db.enums import IndexingStatus
+from onyx.db.enums import IndexModelStatus
 from onyx.db.index_attempt import create_index_attempt_error
 from onyx.db.index_attempt import get_index_attempt
 from onyx.db.index_attempt import get_index_attempt_errors_for_cc_pair
@@ -42,17 +48,19 @@ from onyx.db.index_attempt import transition_attempt_to_in_progress
 from onyx.db.index_attempt import update_docs_indexed
 from onyx.db.models import IndexAttempt
 from onyx.db.models import IndexAttemptError
-from onyx.db.models import IndexingStatus
-from onyx.db.models import IndexModelStatus
 from onyx.document_index.factory import get_default_document_index
 from onyx.httpx.httpx_pool import HttpxPool
 from onyx.indexing.embedder import DefaultIndexingEmbedder
 from onyx.indexing.indexing_heartbeat import IndexingHeartbeatInterface
 from onyx.indexing.indexing_pipeline import build_indexing_pipeline
+from onyx.natural_language_processing.search_nlp_models import (
+    InformationContentClassificationModel,
+)
 from onyx.utils.logger import setup_logger
 from onyx.utils.logger import TaskAttemptSingleton
 from onyx.utils.telemetry import create_milestone_and_report
 from onyx.utils.variable_functionality import global_version
+from shared_configs.configs import MULTI_TENANT
 
 logger = setup_logger()
 
@@ -65,7 +73,6 @@ def _get_connector_runner(
     batch_size: int,
     start_time: datetime,
     end_time: datetime,
-    tenant_id: str | None,
     leave_connector_active: bool = LEAVE_CONNECTOR_ACTIVE_ON_INITIALIZATION_FAILURE,
 ) -> ConnectorRunner:
     """
@@ -84,13 +91,23 @@ def _get_connector_runner(
             input_type=task,
             connector_specific_config=attempt.connector_credential_pair.connector.connector_specific_config,
             credential=attempt.connector_credential_pair.credential,
-            tenant_id=tenant_id,
         )
-    except Exception as e:
-        logger.exception(f"Unable to instantiate connector due to {e}")
 
+        # validate the connector settings
+        if not INTEGRATION_TESTS_MODE:
+            runnable_connector.validate_connector_settings()
+
+    except UnexpectedValidationError as e:
+        logger.exception(
+            "Unable to instantiate connector due to an unexpected temporary issue."
+        )
+        raise e
+    except Exception as e:
+        logger.exception("Unable to instantiate connector. Pausing until fixed.")
         # since we failed to even instantiate the connector, we pause the CCPair since
-        # it will never succeed. Sometimes there are cases where the connector will
+        # it will never succeed
+
+        # Sometimes there are cases where the connector will
         # intermittently fail to initialize in which case we should pass in
         # leave_connector_active=True to allow it to continue.
         # For example, if there is nightly maintenance on a Confluence Server instance,
@@ -141,14 +158,12 @@ def strip_null_characters(doc_batch: list[Document]) -> list[Document]:
             )
 
         for section in cleaned_doc.sections:
-            if section.link and "\x00" in section.link:
-                logger.warning(
-                    f"NUL characters found in document link for document: {cleaned_doc.id}"
-                )
+            if section.link is not None:
                 section.link = section.link.replace("\x00", "")
 
             # since text can be longer, just replace to avoid double scan
-            section.text = section.text.replace("\x00", "")
+            if isinstance(section, TextSection) and section.text is not None:
+                section.text = section.text.replace("\x00", "")
 
         cleaned_batch.append(cleaned_doc)
 
@@ -234,7 +249,7 @@ def _check_failure_threshold(
 def _run_indexing(
     db_session: Session,
     index_attempt_id: int,
-    tenant_id: str | None,
+    tenant_id: str,
     callback: IndexingHeartbeatInterface | None = None,
 ) -> None:
     """
@@ -244,7 +259,7 @@ def _run_indexing(
     """
     start_time = time.monotonic()  # jsut used for logging
 
-    with get_session_with_tenant(tenant_id) as db_session_temp:
+    with get_session_with_current_tenant() as db_session_temp:
         index_attempt_start = get_index_attempt(db_session_temp, index_attempt_id)
         if not index_attempt_start:
             raise ValueError(
@@ -336,6 +351,8 @@ def _run_indexing(
             callback=callback,
         )
 
+    information_content_classification_model = InformationContentClassificationModel()
+
     document_index = get_default_document_index(
         index_attempt_start.search_settings,
         None,
@@ -344,6 +361,7 @@ def _run_indexing(
 
     indexing_pipeline = build_indexing_pipeline(
         embedder=embedding_model,
+        information_content_classification_model=information_content_classification_model,
         document_index=document_index,
         ignore_time_skip=(
             ctx.from_beginning
@@ -369,8 +387,9 @@ def _run_indexing(
     net_doc_change = 0
     document_count = 0
     chunk_count = 0
+    index_attempt: IndexAttempt | None = None
     try:
-        with get_session_with_tenant(tenant_id) as db_session_temp:
+        with get_session_with_current_tenant() as db_session_temp:
             index_attempt = get_index_attempt(db_session_temp, index_attempt_id)
             if not index_attempt:
                 raise RuntimeError(f"Index attempt {index_attempt_id} not found in DB.")
@@ -381,14 +400,13 @@ def _run_indexing(
                 batch_size=INDEX_BATCH_SIZE,
                 start_time=window_start,
                 end_time=window_end,
-                tenant_id=tenant_id,
             )
 
             # don't use a checkpoint if we're explicitly indexing from
             # the beginning in order to avoid weird interactions between
             # checkpointing / failure handling.
             if index_attempt.from_beginning:
-                checkpoint = ConnectorCheckpoint.build_dummy_checkpoint()
+                checkpoint = connector_runner.connector.build_dummy_checkpoint()
             else:
                 checkpoint = get_latest_valid_checkpoint(
                     db_session=db_session_temp,
@@ -396,6 +414,7 @@ def _run_indexing(
                     search_settings_id=index_attempt.search_settings_id,
                     window_start=window_start,
                     window_end=window_end,
+                    connector=connector_runner.connector,
                 )
 
             unresolved_errors = get_index_attempt_errors_for_cc_pair(
@@ -430,7 +449,7 @@ def _run_indexing(
                         raise ConnectorStopSignal("Connector stop signal detected")
 
                 # TODO: should we move this into the above callback instead?
-                with get_session_with_tenant(tenant_id) as db_session_temp:
+                with get_session_with_current_tenant() as db_session_temp:
                     # will exception if the connector/index attempt is marked as paused/failed
                     _check_connector_and_attempt_status(
                         db_session_temp, ctx, index_attempt_id
@@ -439,7 +458,7 @@ def _run_indexing(
                 # save record of any failures at the connector level
                 if failure is not None:
                     total_failures += 1
-                    with get_session_with_tenant(tenant_id) as db_session_temp:
+                    with get_session_with_current_tenant() as db_session_temp:
                         create_index_attempt_error(
                             index_attempt_id,
                             ctx.cc_pair_id,
@@ -467,7 +486,11 @@ def _run_indexing(
 
                     doc_size = 0
                     for section in doc.sections:
-                        doc_size += len(section.text)
+                        if (
+                            isinstance(section, TextSection)
+                            and section.text is not None
+                        ):
+                            doc_size += len(section.text)
 
                     if doc_size > INDEXING_SIZE_WARNING_THRESHOLD:
                         logger.warning(
@@ -503,7 +526,7 @@ def _run_indexing(
                     if document.id not in failed_document_ids
                 ]
                 for document_id in successful_document_ids:
-                    with get_session_with_tenant(tenant_id) as db_session_temp:
+                    with get_session_with_current_tenant() as db_session_temp:
                         if document_id in doc_id_to_unresolved_errors:
                             logger.info(
                                 f"Resolving IndexAttemptError for document '{document_id}'"
@@ -516,7 +539,7 @@ def _run_indexing(
                 # add brand new failures
                 if index_pipeline_result.failures:
                     total_failures += len(index_pipeline_result.failures)
-                    with get_session_with_tenant(tenant_id) as db_session_temp:
+                    with get_session_with_current_tenant() as db_session_temp:
                         for failure in index_pipeline_result.failures:
                             create_index_attempt_error(
                                 index_attempt_id,
@@ -533,7 +556,7 @@ def _run_indexing(
                     )
 
                 # This new value is updated every batch, so UI can refresh per batch update
-                with get_session_with_tenant(tenant_id) as db_session_temp:
+                with get_session_with_current_tenant() as db_session_temp:
                     # NOTE: Postgres uses the start of the transactions when computing `NOW()`
                     # so we need either to commit() or to use a new session
                     update_docs_indexed(
@@ -555,7 +578,7 @@ def _run_indexing(
                 check_checkpoint_size(checkpoint)
 
             # save latest checkpoint
-            with get_session_with_tenant(tenant_id) as db_session_temp:
+            with get_session_with_current_tenant() as db_session_temp:
                 save_checkpoint(
                     db_session=db_session_temp,
                     index_attempt_id=index_attempt_id,
@@ -567,9 +590,57 @@ def _run_indexing(
             "Connector run exceptioned after elapsed time: "
             f"{time.monotonic() - start_time} seconds"
         )
+        if isinstance(e, ConnectorValidationError):
+            # On validation errors during indexing, we want to cancel the indexing attempt
+            # and mark the CCPair as invalid. This prevents the connector from being
+            # used in the future until the credentials are updated.
+            with get_session_with_current_tenant() as db_session_temp:
+                mark_attempt_canceled(
+                    index_attempt_id,
+                    db_session_temp,
+                    reason=f"{CONNECTOR_VALIDATION_ERROR_MESSAGE_PREFIX}{str(e)}",
+                )
 
-        if isinstance(e, ConnectorStopSignal):
-            with get_session_with_tenant(tenant_id) as db_session_temp:
+                if ctx.is_primary:
+                    if not index_attempt:
+                        # should always be set by now
+                        raise RuntimeError("Should never happen.")
+
+                    VALIDATION_ERROR_THRESHOLD = 5
+
+                    recent_index_attempts = get_recent_completed_attempts_for_cc_pair(
+                        cc_pair_id=ctx.cc_pair_id,
+                        search_settings_id=index_attempt.search_settings_id,
+                        limit=VALIDATION_ERROR_THRESHOLD,
+                        db_session=db_session_temp,
+                    )
+                    num_validation_errors = len(
+                        [
+                            index_attempt
+                            for index_attempt in recent_index_attempts
+                            if index_attempt.error_msg
+                            and index_attempt.error_msg.startswith(
+                                CONNECTOR_VALIDATION_ERROR_MESSAGE_PREFIX
+                            )
+                        ]
+                    )
+
+                    if num_validation_errors >= VALIDATION_ERROR_THRESHOLD:
+                        logger.warning(
+                            f"Connector {ctx.connector_id} has {num_validation_errors} consecutive validation"
+                            f" errors. Marking the CC Pair as invalid."
+                        )
+                        update_connector_credential_pair(
+                            db_session=db_session_temp,
+                            connector_id=ctx.connector_id,
+                            credential_id=ctx.credential_id,
+                            status=ConnectorCredentialPairStatus.INVALID,
+                        )
+            memory_tracer.stop()
+            raise e
+
+        elif isinstance(e, ConnectorStopSignal):
+            with get_session_with_current_tenant() as db_session_temp:
                 mark_attempt_canceled(
                     index_attempt_id,
                     db_session_temp,
@@ -587,7 +658,7 @@ def _run_indexing(
             memory_tracer.stop()
             raise e
         else:
-            with get_session_with_tenant(tenant_id) as db_session_temp:
+            with get_session_with_current_tenant() as db_session_temp:
                 mark_attempt_failed(
                     index_attempt_id,
                     db_session_temp,
@@ -609,7 +680,7 @@ def _run_indexing(
     memory_tracer.stop()
 
     elapsed_time = time.monotonic() - start_time
-    with get_session_with_tenant(tenant_id) as db_session_temp:
+    with get_session_with_current_tenant() as db_session_temp:
         # resolve entity-based errors
         for error in entity_based_unresolved_errors:
             logger.info(f"Resolving IndexAttemptError for entity '{error.entity_id}'")
@@ -654,7 +725,7 @@ def _run_indexing(
 
 def run_indexing_entrypoint(
     index_attempt_id: int,
-    tenant_id: str | None,
+    tenant_id: str,
     connector_credential_pair_id: int,
     is_ee: bool = False,
     callback: IndexingHeartbeatInterface | None = None,
@@ -669,12 +740,12 @@ def run_indexing_entrypoint(
     TaskAttemptSingleton.set_cc_and_index_id(
         index_attempt_id, connector_credential_pair_id
     )
-    with get_session_with_tenant(tenant_id) as db_session:
+    with get_session_with_current_tenant() as db_session:
         # TODO: remove long running session entirely
         attempt = transition_attempt_to_in_progress(index_attempt_id, db_session)
 
         tenant_str = ""
-        if tenant_id is not None:
+        if MULTI_TENANT:
             tenant_str = f" for tenant {tenant_id}"
 
         connector_name = attempt.connector_credential_pair.connector.name
@@ -690,7 +761,7 @@ def run_indexing_entrypoint(
         f"credentials='{credential_id}'"
     )
 
-    with get_session_with_tenant(tenant_id) as db_session:
+    with get_session_with_current_tenant() as db_session:
         _run_indexing(db_session, index_attempt_id, tenant_id, callback)
 
     logger.info(

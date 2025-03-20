@@ -107,7 +107,7 @@ class OnyxLoggingAdapter(logging.LoggerAdapter):
         # This will always be the case for authenticated API requests
         if MULTI_TENANT:
             tenant_id = CURRENT_TENANT_ID_CONTEXTVAR.get()
-            if tenant_id != POSTGRES_DEFAULT_SCHEMA:
+            if tenant_id != POSTGRES_DEFAULT_SCHEMA and tenant_id is not None:
                 # Strip tenant_ prefix and take first 8 chars for cleaner logs
                 tenant_display = tenant_id.removeprefix(TENANT_ID_PREFIX)
                 short_tenant = (
@@ -253,3 +253,8 @@ def print_loggers() -> None:
 
         print(f"  Propagate: {logger.propagate}")
         print()
+
+
+def format_error_for_logging(e: Exception) -> str:
+    """Clean error message by removing newlines for better logging."""
+    return str(e).replace("\n", " ")

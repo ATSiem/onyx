@@ -6,7 +6,11 @@ from typing import cast
 from onyx.auth.schemas import AuthBackend
 from onyx.configs.constants import AuthType
 from onyx.configs.constants import DocumentIndexType
+from onyx.configs.constants import QueryHistoryType
 from onyx.file_processing.enums import HtmlBasedConnectorTransformLinksStrategy
+from onyx.prompts.image_analysis import DEFAULT_IMAGE_ANALYSIS_SYSTEM_PROMPT
+from onyx.prompts.image_analysis import DEFAULT_IMAGE_SUMMARIZATION_SYSTEM_PROMPT
+from onyx.prompts.image_analysis import DEFAULT_IMAGE_SUMMARIZATION_USER_PROMPT
 
 #####
 # App Configs
@@ -29,6 +33,13 @@ GENERATIVE_MODEL_ACCESS_CHECK_FREQ = int(
 )  # 1 day
 DISABLE_GENERATIVE_AI = os.environ.get("DISABLE_GENERATIVE_AI", "").lower() == "true"
 
+# Controls whether to allow admin query history reports with:
+# 1. associated user emails
+# 2. anonymized user emails
+# 3. no queries
+ONYX_QUERY_HISTORY_TYPE = QueryHistoryType(
+    (os.environ.get("ONYX_QUERY_HISTORY_TYPE") or QueryHistoryType.NORMAL.value).lower()
+)
 
 #####
 # Web Configs
@@ -150,6 +161,8 @@ try:
     INDEX_BATCH_SIZE = int(os.environ.get("INDEX_BATCH_SIZE", 16))
 except ValueError:
     INDEX_BATCH_SIZE = 16
+
+MAX_DRIVE_WORKERS = int(os.environ.get("MAX_DRIVE_WORKERS", 4))
 
 # Below are intended to match the env variables names used by the official postgres docker image
 # https://hub.docker.com/_/postgres
@@ -334,8 +347,8 @@ HTML_BASED_CONNECTOR_TRANSFORM_LINKS_STRATEGY = os.environ.get(
     HtmlBasedConnectorTransformLinksStrategy.STRIP,
 )
 
-NOTION_CONNECTOR_ENABLE_RECURSIVE_PAGE_LOOKUP = (
-    os.environ.get("NOTION_CONNECTOR_ENABLE_RECURSIVE_PAGE_LOOKUP", "").lower()
+NOTION_CONNECTOR_DISABLE_RECURSIVE_PAGE_LOOKUP = (
+    os.environ.get("NOTION_CONNECTOR_DISABLE_RECURSIVE_PAGE_LOOKUP", "").lower()
     == "true"
 )
 
@@ -626,6 +639,8 @@ POD_NAMESPACE = os.environ.get("POD_NAMESPACE")
 
 DEV_MODE = os.environ.get("DEV_MODE", "").lower() == "true"
 
+INTEGRATION_TESTS_MODE = os.environ.get("INTEGRATION_TESTS_MODE", "").lower() == "true"
+
 MOCK_CONNECTOR_FILE_PATH = os.environ.get("MOCK_CONNECTOR_FILE_PATH")
 
 TEST_ENV = os.environ.get("TEST_ENV", "").lower() == "true"
@@ -633,4 +648,28 @@ TEST_ENV = os.environ.get("TEST_ENV", "").lower() == "true"
 # Set to true to mock LLM responses for testing purposes
 MOCK_LLM_RESPONSE = (
     os.environ.get("MOCK_LLM_RESPONSE") if os.environ.get("MOCK_LLM_RESPONSE") else None
+)
+
+
+DEFAULT_IMAGE_ANALYSIS_MAX_SIZE_MB = 20
+
+# Number of pre-provisioned tenants to maintain
+TARGET_AVAILABLE_TENANTS = int(os.environ.get("TARGET_AVAILABLE_TENANTS", "5"))
+
+
+# Image summarization configuration
+IMAGE_SUMMARIZATION_SYSTEM_PROMPT = os.environ.get(
+    "IMAGE_SUMMARIZATION_SYSTEM_PROMPT",
+    DEFAULT_IMAGE_SUMMARIZATION_SYSTEM_PROMPT,
+)
+
+# The user prompt for image summarization - the image filename will be automatically prepended
+IMAGE_SUMMARIZATION_USER_PROMPT = os.environ.get(
+    "IMAGE_SUMMARIZATION_USER_PROMPT",
+    DEFAULT_IMAGE_SUMMARIZATION_USER_PROMPT,
+)
+
+IMAGE_ANALYSIS_SYSTEM_PROMPT = os.environ.get(
+    "IMAGE_ANALYSIS_SYSTEM_PROMPT",
+    DEFAULT_IMAGE_ANALYSIS_SYSTEM_PROMPT,
 )
