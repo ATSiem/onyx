@@ -198,3 +198,44 @@ docker compose -f deployment/docker_compose/docker-compose.prod.yml -p onyx-stac
 
 ### Email Configuration
 For email invites to work properly, ensure `MULTI_TENANT=true` is set in your `.env` file.
+
+### Testing
+
+#### Frontend Testing
+The Onyx codebase uses Jest for frontend testing with the following setup:
+
+```bash
+# Run all tests
+cd web
+npm test
+
+# Run specific test file
+npm test -- src/components/llm/LLMSelector.test.tsx
+
+# Run tests with coverage
+npm test -- --coverage
+```
+
+Frontend tests use:
+- Jest as the test runner
+- jsdom for DOM simulation
+- @testing-library/react for component testing
+- TypeScript support via babel-jest
+
+The Jest configuration is in `web/jest.config.js` and Babel configuration in `web/babel.config.js`.
+
+#### Test Structure
+- **Unit Tests**: Focus on testing individual functions/components in isolation
+- **Regression Tests**: Ensure that fixed bugs don't reappear 
+- **Integration Tests**: Test interactions between components
+- **E2E Tests**: Use Playwright for end-to-end testing (in `web/tests/e2e/`)
+
+#### Best Practices
+1. Write tests for any bugs found in production
+2. Use descriptive test names that explain what's being tested
+3. Keep tests focused on testing behavior, not implementation
+4. Run tests before pushing to main branch
+5. Add appropriate comments to regression tests explaining the issue they're addressing
+
+#### Example: Regression Test
+See `web/src/components/llm/LLMSelector.test.tsx` for an example of a regression test that ensures specific model names are properly filtered.

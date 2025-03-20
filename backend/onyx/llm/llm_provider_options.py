@@ -147,4 +147,13 @@ def fetch_available_well_known_llms() -> list[WellKnownLLMProviderDescriptor]:
 
 
 def fetch_models_for_provider(provider_name: str) -> list[str]:
-    return _PROVIDER_TO_MODELS_MAP.get(provider_name, [])
+    models = _PROVIDER_TO_MODELS_MAP.get(provider_name, [])
+    # Filter out problematic models
+    if provider_name == OPENAI_PROVIDER_NAME:
+        # Adding explicit check to ensure o1-2024-12-17 is filtered out
+        models = [model for model in models if model != "o1-2024-12-17"]
+    
+    # Additional cleanup to ensure o1-2024-12-17 is completely filtered out
+    models = [model for model in models if model != "o1-2024-12-17"]
+    
+    return models
