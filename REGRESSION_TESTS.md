@@ -47,7 +47,15 @@ When making fork-specific fixes:
 
 ## Git Hooks
 
-A pre-merge Git hook is installed in `.git/hooks/pre-merge-commit` to automatically run these tests before any merge operation. If tests fail, the merge will be aborted.
+We have two Git hooks set up to ensure our custom functionality is preserved when merging from upstream:
+
+1. **Pre-Merge Hook** (`.git/hooks/pre-merge-commit`): Runs tests before the merge is completed. If tests fail, the merge is aborted.
+
+2. **Post-Merge Hook** (`.git/hooks/post-merge`): Runs tests after the merge is completed. If tests fail, it warns you to fix issues or consider reverting the merge.
+
+This dual approach ensures that:
+- Breaking changes aren't merged (pre-merge)
+- You catch any subtle issues that might only appear after the merge is complete (post-merge)
 
 ## Important Note
 
