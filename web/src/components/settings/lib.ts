@@ -3,6 +3,7 @@ import {
   EnterpriseSettings,
   ApplicationStatus,
   Settings,
+  QueryHistoryType,
 } from "@/app/admin/settings/interfaces";
 import {
   CUSTOM_ANALYTICS_ENABLED,
@@ -51,7 +52,9 @@ export async function fetchSettingsSS(): Promise<CombinedSettings | null> {
           notifications: [],
           needs_reindexing: false,
           anonymous_user_enabled: false,
-          pro_search_disabled: false,
+          pro_search_enabled: true,
+          temperature_override_enabled: true,
+          query_history_type: QueryHistoryType.NORMAL,
         };
       } else {
         throw new Error(
@@ -94,8 +97,8 @@ export async function fetchSettingsSS(): Promise<CombinedSettings | null> {
       }
     }
 
-    if (enterpriseSettings && settings.pro_search_disabled == null) {
-      settings.pro_search_disabled = true;
+    if (settings.pro_search_enabled == null) {
+      settings.pro_search_enabled = true;
     }
 
     const webVersion = getWebVersion();

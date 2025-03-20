@@ -45,10 +45,22 @@ class UserPreferences(BaseModel):
     hidden_assistants: list[int] = []
     visible_assistants: list[int] = []
     default_model: str | None = None
-    auto_scroll: bool | None = None
     pinned_assistants: list[int] | None = None
     shortcut_enabled: bool | None = None
+
+    # These will default to workspace settings on the frontend if not set
+    auto_scroll: bool | None = None
     temperature_override_enabled: bool | None = None
+
+
+class TenantSnapshot(BaseModel):
+    tenant_id: str
+    number_of_users: int
+
+
+class TenantInfo(BaseModel):
+    invitation: TenantSnapshot | None = None
+    new_tenant: TenantSnapshot | None = None
 
 
 class UserInfo(BaseModel):
@@ -63,8 +75,10 @@ class UserInfo(BaseModel):
     current_token_created_at: datetime | None = None
     current_token_expiry_length: int | None = None
     is_cloud_superuser: bool = False
-    organization_name: str | None = None
+    team_name: str | None = None
     is_anonymous_user: bool | None = None
+    password_configured: bool | None = None
+    tenant_info: TenantInfo | None = None
 
     @classmethod
     def from_model(
@@ -73,8 +87,9 @@ class UserInfo(BaseModel):
         current_token_created_at: datetime | None = None,
         expiry_length: int | None = None,
         is_cloud_superuser: bool = False,
-        organization_name: str | None = None,
+        team_name: str | None = None,
         is_anonymous_user: bool | None = None,
+        tenant_info: TenantInfo | None = None,
     ) -> "UserInfo":
         return cls(
             id=str(user.id),
@@ -83,19 +98,20 @@ class UserInfo(BaseModel):
             is_superuser=user.is_superuser,
             is_verified=user.is_verified,
             role=user.role,
+            password_configured=user.password_configured,
             preferences=(
                 UserPreferences(
                     shortcut_enabled=user.shortcut_enabled,
-                    auto_scroll=user.auto_scroll,
                     chosen_assistants=user.chosen_assistants,
                     default_model=user.default_model,
                     hidden_assistants=user.hidden_assistants,
                     pinned_assistants=user.pinned_assistants,
                     visible_assistants=user.visible_assistants,
+                    auto_scroll=user.auto_scroll,
                     temperature_override_enabled=user.temperature_override_enabled,
                 )
             ),
-            organization_name=organization_name,
+            team_name=team_name,
             # set to None if TRACK_EXTERNAL_IDP_EXPIRY is False so that we avoid cases
             # where they previously had this set + used OIDC, and now they switched to
             # basic auth are now constantly getting redirected back to the login page
@@ -105,6 +121,7 @@ class UserInfo(BaseModel):
             current_token_expiry_length=expiry_length,
             is_cloud_superuser=is_cloud_superuser,
             is_anonymous_user=is_anonymous_user,
+            tenant_info=tenant_info,
         )
 
 
@@ -177,6 +194,7 @@ class SlackChannelConfigCreationRequest(BaseModel):
     channel_name: str
     respond_tag_only: bool = False
     respond_to_bots: bool = False
+    is_ephemeral: bool = False
     show_continue_in_web_ui: bool = False
     enable_auto_filters: bool = False
     # If no team members, assume respond in the channel to everyone
@@ -187,6 +205,7 @@ class SlackChannelConfigCreationRequest(BaseModel):
     response_type: SlackBotResponseType
     # XXX this is going away soon
     standard_answer_categories: list[int] = Field(default_factory=list)
+    disabled: bool = False
 
     @field_validator("answer_filters", mode="before")
     @classmethod

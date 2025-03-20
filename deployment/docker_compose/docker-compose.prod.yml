@@ -33,6 +33,8 @@ services:
     #   - ./bundle.pem:/app/bundle.pem:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - log_store:/var/log/persisted-logs
     logging:
       driver: json-file
       options:
@@ -75,6 +77,8 @@ services:
     #   - ./bundle.pem:/app/bundle.pem:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    volumes:
+      - log_store:/var/log/persisted-logs
     logging:
       driver: json-file
       options:
@@ -262,3 +266,4 @@ volumes:
   # Created by the container itself
   model_cache_huggingface:
   indexing_huggingface_model_cache:
+  log_store:  # for logs that we don't want to lose on container restarts

@@ -3,7 +3,10 @@ import { Button } from "@/components/ui/button";
 import { ValidSources } from "@/lib/types";
 import { FaAccusoft } from "react-icons/fa";
 import { submitCredential } from "@/components/admin/connectors/CredentialForm";
-import { TextFormField } from "@/components/admin/connectors/Field";
+import {
+  BooleanFormField,
+  TextFormField,
+} from "@/components/admin/connectors/Field";
 import { Form, Formik, FormikHelpers } from "formik";
 import { PopupSpec } from "@/components/admin/connectors/Popup";
 import { getSourceDocLink } from "@/lib/sources";
@@ -111,9 +114,15 @@ export default function CreateCredential({
 
     const { name, is_public, groups, ...credentialValues } = values;
 
+    const filteredCredentialValues = Object.fromEntries(
+      Object.entries(credentialValues).filter(
+        ([_, value]) => value !== null && value !== ""
+      )
+    );
+
     try {
       const response = await submitCredential({
-        credential_json: credentialValues,
+        credential_json: filteredCredentialValues,
         admin_public: true,
         curator_public: is_public,
         groups: groups,
@@ -194,26 +203,37 @@ export default function CreateCredential({
               for information on setting up this connector.
             </p>
           )}
-          <CardSection className="w-full items-start  dark:bg-neutral-900 mt-4 flex flex-col gap-y-6">
+          <CardSection className="w-full items-start dark:bg-neutral-900 mt-4 flex flex-col gap-y-6">
             <TextFormField
               name="name"
               placeholder="(Optional) credential name.."
               label="Name:"
             />
-            {Object.entries(credentialTemplate).map(([key, val]) => (
-              <TextFormField
-                key={key}
-                name={key}
-                placeholder={val}
-                label={getDisplayNameForCredentialKey(key)}
-                type={
-                  key.toLowerCase().includes("token") ||
-                  key.toLowerCase().includes("password")
-                    ? "password"
-                    : "text"
-                }
-              />
-            ))}
+            {Object.entries(credentialTemplate).map(([key, val]) => {
+              if (typeof val === "boolean") {
+                return (
+                  <BooleanFormField
+                    key={key}
+                    name={key}
+                    label={getDisplayNameForCredentialKey(key)}
+                  />
+                );
+              }
+              return (
+                <TextFormField
+                  key={key}
+                  name={key}
+                  placeholder={val}
+                  label={getDisplayNameForCredentialKey(key)}
+                  type={
+                    key.toLowerCase().includes("token") ||
+                    key.toLowerCase().includes("password")
+                      ? "password"
+                      : "text"
+                  }
+                />
+              );
+            })}
             {!swapConnector && (
               <div className="mt-4 flex w-full flex-col sm:flex-row justify-between items-end">
                 <div className="w-full sm:w-3/4 mb-4 sm:mb-0">

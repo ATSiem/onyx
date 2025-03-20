@@ -7,6 +7,7 @@ from typing import Optional
 from uuid import uuid4
 
 from pydantic import BaseModel
+from sqlalchemy.orm import validates
 from typing_extensions import TypedDict  # noreorder
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from sqlalchemy import ForeignKey
 from sqlalchemy import func
 from sqlalchemy import Index
 from sqlalchemy import Integer
+
 from sqlalchemy import Sequence
 from sqlalchemy import String
 from sqlalchemy import Text
@@ -44,7 +46,13 @@ from onyx.configs.constants import DEFAULT_BOOST, MilestoneRecordType
 from onyx.configs.constants import DocumentSource
 from onyx.configs.constants import FileOrigin
 from onyx.configs.constants import MessageType
-from onyx.db.enums import AccessType, IndexingMode, SyncType, SyncStatus
+from onyx.db.enums import (
+    AccessType,
+    EmbeddingPrecision,
+    IndexingMode,
+    SyncType,
+    SyncStatus,
+)
 from onyx.configs.constants import NotificationType
 from onyx.configs.constants import SearchFeedbackType
 from onyx.configs.constants import TokenRateLimitScope
@@ -148,11 +156,12 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     putting here for simpicity
     """
 
-    # if specified, controls the assistants that are shown to the user + their order
-    # if not specified, all assistants are shown
-    temperature_override_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    auto_scroll: Mapped[bool] = mapped_column(Boolean, default=True)
+    temperature_override_enabled: Mapped[bool | None] = mapped_column(
+        Boolean, default=None
+    )
+    auto_scroll: Mapped[bool | None] = mapped_column(Boolean, default=None)
     shortcut_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+
     chosen_assistants: Mapped[list[int] | None] = mapped_column(
         postgresql.JSONB(), nullable=True, default=None
     )
@@ -203,6 +212,17 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
         back_populates="creator",
         primaryjoin="User.id == foreign(ConnectorCredentialPair.creator_id)",
     )
+
+    @validates("email")
+    def validate_email(self, key: str, value: str) -> str:
+        return value.lower() if value else value
+
+    @property
+    def password_configured(self) -> bool:
+        """
+        Returns True if the user has at least one OAuth (or OIDC) account.
+        """
+        return not bool(self.oauth_accounts)
 
 
 class AccessToken(SQLAlchemyBaseAccessTokenTableUUID, Base):
@@ -342,7 +362,9 @@ class Document__Tag(Base):
     document_id: Mapped[str] = mapped_column(
         ForeignKey("document.id"), primary_key=True
     )
-    tag_id: Mapped[int] = mapped_column(ForeignKey("tag.id"), primary_key=True)
+    tag_id: Mapped[int] = mapped_column(
+        ForeignKey("tag.id"), primary_key=True, index=True
+    )
 
 
 class Persona__Tool(Base):
@@ -560,6 +582,63 @@ class Document(Base):
         back_populates="documents",
     )
 
+    __table_args__ = (
+        Index(
+            "ix_document_sync_status",
+            last_modified,
+            last_synced,
+        ),
+    )
+
+
+class ChunkStats(Base):
+    __tablename__ = "chunk_stats"
+    # NOTE: if more sensitive data is added here for display, make sure to add user/group permission
+
+    # this should correspond to the ID of the document
+    # (as is passed around in Onyx)
+    id: Mapped[str] = mapped_column(
+        NullFilteredString,
+        primary_key=True,
+        default=lambda context: (
+            f"{context.get_current_parameters()['document_id']}"
+            f"__{context.get_current_parameters()['chunk_in_doc_id']}"
+        ),
+        index=True,
+    )
+
+    # Reference to parent document
+    document_id: Mapped[str] = mapped_column(
+        NullFilteredString, ForeignKey("document.id"), nullable=False, index=True
+    )
+
+    chunk_in_doc_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    information_content_boost: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+
+    last_modified: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True, default=func.now()
+    )
+    last_synced: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_chunk_sync_status",
+            last_modified,
+            last_synced,
+        ),
+        UniqueConstraint(
+            "document_id", "chunk_in_doc_id", name="uq_chunk_stats_doc_chunk"
+        ),
+    )
+
 
 class Tag(Base):
     __tablename__ = "tag"
@@ -692,6 +771,23 @@ class SearchSettings(Base):
         ForeignKey("embedding_provider.provider_type"), nullable=True
     )
 
+    # Whether switching to this model should re-index all connectors in the background
+    # if no re-index is needed, will be ignored. Only used during the switch-over process.
+    background_reindex_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # allows for quantization -> less memory usage for a small performance hit
+    embedding_precision: Mapped[EmbeddingPrecision] = mapped_column(
+        Enum(EmbeddingPrecision, native_enum=False)
+    )
+
+    # can be used to reduce dimensionality of vectors and save memory with
+    # a small performance hit. More details in the `Reducing embedding dimensions`
+    # section here:
+    # https://platform.openai.com/docs/guides/embeddings#embedding-models
+    # If not specified, will just use the model_dim without any reduction.
+    # NOTE: this is only currently available for OpenAI models
+    reduced_dimension: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # Mini and Large Chunks (large chunk also checks for model max context)
     multipass_indexing: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -772,6 +868,12 @@ class SearchSettings(Base):
         return SearchSettings.can_use_large_chunks(
             self.multipass_indexing, self.model_name, self.provider_type
         )
+
+    @property
+    def final_embedding_dim(self) -> int:
+        if self.reduced_dimension:
+            return self.reduced_dimension
+        return self.model_dim
 
     @staticmethod
     def can_use_large_chunks(
@@ -1221,6 +1323,7 @@ class ChatMessage(Base):
         DateTime(timezone=True), server_default=func.now()
     )
 
+    is_agentic: Mapped[bool] = mapped_column(Boolean, default=False)
     refined_answer_improvement: Mapped[bool] = mapped_column(Boolean, nullable=True)
 
     chat_session: Mapped[ChatSession] = relationship("ChatSession")
@@ -1435,6 +1538,8 @@ class LLMProvider(Base):
 
     # should only be set for a single provider
     is_default_provider: Mapped[bool | None] = mapped_column(Boolean, unique=True)
+    is_default_vision_provider: Mapped[bool | None] = mapped_column(Boolean)
+    default_vision_model: Mapped[str | None] = mapped_column(String, nullable=True)
     # EE only
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     groups: Mapped[list["UserGroup"]] = relationship(
@@ -1736,12 +1841,14 @@ class ChannelConfig(TypedDict):
     channel_name: str | None  # None for default channel config
     respond_tag_only: NotRequired[bool]  # defaults to False
     respond_to_bots: NotRequired[bool]  # defaults to False
+    is_ephemeral: NotRequired[bool]  # defaults to False
     respond_member_group_list: NotRequired[list[str]]
     answer_filters: NotRequired[list[AllowedAnswerFilters]]
     # If None then no follow up
     # If empty list, follow up with no tags
     follow_up_tags: NotRequired[list[str]]
     show_continue_in_web_ui: NotRequired[bool]  # defaults to False
+    disabled: NotRequired[bool]  # defaults to False
 
 
 class SlackChannelConfig(Base):
@@ -1765,6 +1872,7 @@ class SlackChannelConfig(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     persona: Mapped[Persona | None] = relationship("Persona")
+
     slack_bot: Mapped["SlackBot"] = relationship(
         "SlackBot",
         back_populates="slack_channel_configs",
@@ -2238,15 +2346,29 @@ class PublicBase(DeclarativeBase):
     __abstract__ = True
 
 
+# Strictly keeps track of the tenant that a given user will authenticate to.
 class UserTenantMapping(Base):
     __tablename__ = "user_tenant_mapping"
-    __table_args__ = (
-        UniqueConstraint("email", "tenant_id", name="uq_user_tenant"),
-        {"schema": "public"},
-    )
+    __table_args__ = ({"schema": "public"},)
 
     email: Mapped[str] = mapped_column(String, nullable=False, primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(String, nullable=False)
+    tenant_id: Mapped[str] = mapped_column(String, nullable=False, primary_key=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    @validates("email")
+    def validate_email(self, key: str, value: str) -> str:
+        return value.lower() if value else value
+
+
+class AvailableTenant(Base):
+    __tablename__ = "available_tenant"
+    """
+    These entries will only exist ephemerally and are meant to be picked up by new users on registration.
+    """
+
+    tenant_id: Mapped[str] = mapped_column(String, primary_key=True, nullable=False)
+    alembic_version: Mapped[str] = mapped_column(String, nullable=False)
+    date_created: Mapped[datetime.datetime] = mapped_column(DateTime, nullable=False)
 
 
 # This is a mapping from tenant IDs to anonymous user paths

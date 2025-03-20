@@ -63,6 +63,9 @@ class IndexModelStatus(str, PyEnum):
     PRESENT = "PRESENT"
     FUTURE = "FUTURE"
 
+    def is_current(self) -> bool:
+        return self == IndexModelStatus.PRESENT
+
 
 class ChatSessionSharedStatus(str, PyEnum):
     PUBLIC = "public"
@@ -73,6 +76,7 @@ class ConnectorCredentialPairStatus(str, PyEnum):
     ACTIVE = "ACTIVE"
     PAUSED = "PAUSED"
     DELETING = "DELETING"
+    INVALID = "INVALID"
 
     def is_active(self) -> bool:
         return self == ConnectorCredentialPairStatus.ACTIVE
@@ -82,3 +86,11 @@ class AccessType(str, PyEnum):
     PUBLIC = "public"
     PRIVATE = "private"
     SYNC = "sync"
+
+
+class EmbeddingPrecision(str, PyEnum):
+    # matches vespa tensor type
+    # only support float / bfloat16 for now, since there's not a
+    # good reason to specify anything else
+    BFLOAT16 = "bfloat16"
+    FLOAT = "float"

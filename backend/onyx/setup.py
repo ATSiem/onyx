@@ -21,6 +21,7 @@ from onyx.db.connector_credential_pair import get_connector_credential_pairs
 from onyx.db.connector_credential_pair import resync_cc_pair
 from onyx.db.credentials import create_initial_public_credential
 from onyx.db.document import check_docs_exist
+from onyx.db.enums import EmbeddingPrecision
 from onyx.db.index_attempt import cancel_indexing_attempts_past_model
 from onyx.db.index_attempt import expire_index_attempts
 from onyx.db.llm import fetch_default_provider
@@ -32,7 +33,7 @@ from onyx.db.search_settings import get_current_search_settings
 from onyx.db.search_settings import get_secondary_search_settings
 from onyx.db.search_settings import update_current_search_settings
 from onyx.db.search_settings import update_secondary_search_settings
-from onyx.db.swap_index import check_index_swap
+from onyx.db.swap_index import check_and_perform_index_swap
 from onyx.document_index.factory import get_default_document_index
 from onyx.document_index.interfaces import DocumentIndex
 from onyx.document_index.vespa.index import VespaIndex
@@ -65,7 +66,7 @@ logger = setup_logger()
 
 
 def setup_onyx(
-    db_session: Session, tenant_id: str | None, cohere_enabled: bool = False
+    db_session: Session, tenant_id: str, cohere_enabled: bool = False
 ) -> None:
     """
     Setup Onyx for a particular tenant. In the Single Tenant case, it will set it up for the default schema
@@ -73,7 +74,7 @@ def setup_onyx(
 
     The Tenant Service calls the tenants/create endpoint which runs this.
     """
-    check_index_swap(db_session=db_session)
+    check_and_perform_index_swap(db_session=db_session)
 
     active_search_settings = get_active_search_settings(db_session)
     search_settings = active_search_settings.primary
@@ -243,16 +244,24 @@ def setup_vespa(
         try:
             logger.notice(f"Setting up Vespa (attempt {x+1}/{num_attempts})...")
             document_index.ensure_indices_exist(
-                index_embedding_dim=index_setting.model_dim,
-                secondary_index_embedding_dim=secondary_index_setting.model_dim
-                if secondary_index_setting
-                else None,
+                primary_embedding_dim=index_setting.final_embedding_dim,
+                primary_embedding_precision=index_setting.embedding_precision,
+                secondary_index_embedding_dim=(
+                    secondary_index_setting.final_embedding_dim
+                    if secondary_index_setting
+                    else None
+                ),
+                secondary_index_embedding_precision=(
+                    secondary_index_setting.embedding_precision
+                    if secondary_index_setting
+                    else None
+                ),
             )
 
             logger.notice("Vespa setup complete.")
             return True
         except Exception:
-            logger.notice(
+            logger.exception(
                 f"Vespa setup did not succeed. The Vespa service may not be ready yet. Retrying in {WAIT_SECONDS} seconds."
             )
             time.sleep(WAIT_SECONDS)
@@ -298,6 +307,7 @@ def setup_postgres(db_session: Session) -> None:
             groups=[],
             display_model_names=OPEN_AI_MODEL_NAMES,
             model_names=OPEN_AI_MODEL_NAMES,
+            api_key_changed=True,
         )
         new_llm_provider = upsert_llm_provider(
             llm_provider=model_req, db_session=db_session
@@ -360,6 +370,11 @@ def setup_vespa_multitenant(supported_indices: list[SupportedEmbeddingModel]) ->
                 ],
                 embedding_dims=[index.dim for index in supported_indices]
                 + [index.dim for index in supported_indices],
+                # on the cloud, just use float for all indices, the option to change this
+                # is not exposed to the user
+                embedding_precisions=[
+                    EmbeddingPrecision.FLOAT for _ in range(len(supported_indices) * 2)
+                ],
             )
 
             logger.notice("Vespa setup complete.")

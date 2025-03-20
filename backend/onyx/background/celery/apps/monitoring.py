@@ -20,6 +20,7 @@ logger = setup_logger()
 
 celery_app = Celery(__name__)
 celery_app.config_from_object("onyx.background.celery.configs.monitoring")
+celery_app.Task = app_base.TenantAwareTask  # type: ignore [misc]
 
 
 @signals.task_prerun.connect
@@ -91,5 +92,6 @@ def on_setup_logging(
 celery_app.autodiscover_tasks(
     [
         "onyx.background.celery.tasks.monitoring",
+        "onyx.background.celery.tasks.tenant_provisioning",
     ]
 )

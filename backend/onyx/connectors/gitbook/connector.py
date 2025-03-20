@@ -13,7 +13,7 @@ from onyx.connectors.interfaces import PollConnector
 from onyx.connectors.interfaces import SecondsSinceUnixEpoch
 from onyx.connectors.models import ConnectorMissingCredentialError
 from onyx.connectors.models import Document
-from onyx.connectors.models import Section
+from onyx.connectors.models import TextSection
 from onyx.utils.logger import setup_logger
 
 
@@ -183,7 +183,7 @@ def _convert_page_to_document(
     return Document(
         id=f"gitbook-{space_id}-{page_id}",
         sections=[
-            Section(
+            TextSection(
                 link=page.get("urls", {}).get("app", ""),
                 text=_extract_text_from_document(page_content),
             )
@@ -228,17 +228,26 @@ class GitbookConnector(LoadConnector, PollConnector):
             raise ConnectorMissingCredentialError("GitBook")
 
         try:
-            content = self.client.get(f"/spaces/{self.space_id}/content")
-            pages = content.get("pages", [])
-
+            content = self.client.get(f"/spaces/{self.space_id}/content/pages")
+            pages: list[dict[str, Any]] = content.get("pages", [])
             current_batch: list[Document] = []
-            for page in pages:
-                updated_at = datetime.fromisoformat(page["updatedAt"])
 
+            logger.info(f"Found {len(pages)} root pages.")
+            logger.info(
+                f"First 20 Page Ids: {[page.get('id', 'Unknown') for page in pages[:20]]}"
+            )
+
+            while pages:
+                page = pages.pop(0)
+
+                updated_at_raw = page.get("updatedAt")
+                if updated_at_raw is None:
+                    # if updatedAt is not present, that means the page has never been edited
+                    continue
+
+                updated_at = datetime.fromisoformat(updated_at_raw)
                 if start and updated_at < start:
-                    if current_batch:
-                        yield current_batch
-                    return
+                    continue
                 if end and updated_at > end:
                     continue
 
@@ -249,6 +258,8 @@ class GitbookConnector(LoadConnector, PollConnector):
                 if len(current_batch) >= self.batch_size:
                     yield current_batch
                     current_batch = []
+
+                pages.extend(page.get("pages", []))
 
             if current_batch:
                 yield current_batch

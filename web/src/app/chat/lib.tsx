@@ -25,6 +25,7 @@ import {
   RetrievalType,
   StreamingError,
   ToolCallMetadata,
+  AgenticMessageResponseIDInfo,
 } from "./interfaces";
 import { Persona } from "../admin/assistants/interfaces";
 import { ReadonlyURLSearchParams } from "next/navigation";
@@ -47,10 +48,10 @@ export function getChatRetentionInfo(
 ): ChatRetentionInfo {
   // If `maximum_chat_retention_days` isn't set- never display retention warning.
   const chatRetentionDays = settings.maximum_chat_retention_days || 10000;
-  const createdDate = new Date(chatSession.time_created);
+  const updatedDate = new Date(chatSession.time_updated);
   const today = new Date();
   const daysFromCreation = Math.ceil(
-    (today.getTime() - createdDate.getTime()) / (1000 * 3600 * 24)
+    (today.getTime() - updatedDate.getTime()) / (1000 * 3600 * 24)
   );
   const daysUntilExpiration = chatRetentionDays - daysFromCreation;
   const showRetentionWarning =
@@ -64,7 +65,7 @@ export function getChatRetentionInfo(
   };
 }
 
-export async function updateModelOverrideForChatSession(
+export async function updateLlmOverrideForChatSession(
   chatSessionId: string,
   newAlternateModel: string
 ) {
@@ -154,7 +155,8 @@ export type PacketType =
   | AgentAnswerPiece
   | SubQuestionPiece
   | ExtendedToolResponse
-  | RefinedAnswerImprovement;
+  | RefinedAnswerImprovement
+  | AgenticMessageResponseIDInfo;
 
 export async function* sendMessage({
   regenerate,
@@ -234,7 +236,7 @@ export async function* sendMessage({
           }
         : null,
     use_existing_user_message: useExistingUserMessage,
-    use_agentic_search: useLanggraph,
+    use_agentic_search: useLanggraph ?? false,
   });
 
   const response = await fetch(`/api/chat/send-message`, {
@@ -250,7 +252,7 @@ export async function* sendMessage({
     throw new Error(`HTTP error! status: ${response.status}`);
   }
 
-  yield* handleSSEStream<PacketType>(response);
+  yield* handleSSEStream<PacketType>(response, signal);
 }
 
 export async function nameChatSession(chatSessionId: string) {
@@ -327,7 +329,7 @@ export async function deleteChatSession(chatSessionId: string) {
   return response;
 }
 
-export async function deleteAllChatSessions(sessionType: "Chat" | "Search") {
+export async function deleteAllChatSessions() {
   const response = await fetch(`/api/chat/delete-all-chat-sessions`, {
     method: "DELETE",
     headers: {
@@ -417,7 +419,7 @@ export function groupSessionsByDateRange(chatSessions: ChatSession[]) {
   };
 
   chatSessions.forEach((chatSession) => {
-    const chatSessionDate = new Date(chatSession.time_created);
+    const chatSessionDate = new Date(chatSession.time_updated);
 
     const diffTime = today.getTime() - chatSessionDate.getTime();
     const diffDays = diffTime / (1000 * 3600 * 24); // Convert time difference to days
@@ -499,6 +501,7 @@ export function processRawChatHistory(
       sub_questions: subQuestions,
       isImprovement:
         (messageInfo.refined_answer_improvement as unknown as boolean) || false,
+      is_agentic: messageInfo.is_agentic,
     };
 
     messages.set(messageInfo.message_id, message);

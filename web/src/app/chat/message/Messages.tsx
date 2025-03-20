@@ -16,15 +16,16 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { unified } from "unified";
 import ReactMarkdown from "react-markdown";
 import { OnyxDocument, FilteredOnyxDocument } from "@/lib/search/interfaces";
 import { SearchSummary } from "./SearchSummary";
-import {
-  markdownToHtml,
-  getMarkdownForSelection,
-} from "@/app/chat/message/codeUtils";
 import { SkippedSearch } from "./SkippedSearch";
 import remarkGfm from "remark-gfm";
+import remarkParse from "remark-parse";
+import remarkRehype from "remark-rehype";
+import rehypeSanitize from "rehype-sanitize";
+import rehypeStringify from "rehype-stringify";
 import { CopyButton } from "@/components/CopyButton";
 import { ChatFileType, FileDescriptor, ToolCallMetadata } from "../interfaces";
 import {
@@ -58,7 +59,7 @@ import { useMouseTracking } from "./hooks";
 import { SettingsContext } from "@/components/settings/SettingsProvider";
 import GeneratingImageDisplay from "../tools/GeneratingImageDisplay";
 import RegenerateOption from "../RegenerateOption";
-import { LlmOverride } from "@/lib/hooks";
+import { LlmDescriptor } from "@/lib/hooks";
 import { ContinueGenerating } from "./ContinueMessage";
 import { MemoizedAnchor, MemoizedParagraph } from "./MemoizedTextComponents";
 import { extractCodeText, preprocessLaTeX } from "./codeUtils";
@@ -69,6 +70,8 @@ import { SourceCard } from "./SourcesDisplay";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import { copyAll, handleCopy } from "./copyingUtils";
+import { transformLinkUri } from "@/lib/utils";
 
 const TOOLS_WITH_CUSTOM_HANDLING = [
   SEARCH_TOOL_NAME,
@@ -213,7 +216,7 @@ export const AIMessage = ({
   handleForceSearch?: () => void;
   retrievalDisabled?: boolean;
   overriddenModel?: string;
-  regenerate?: (modelOverRide: LlmOverride) => Promise<void>;
+  regenerate?: (modelOverRide: LlmDescriptor) => Promise<void>;
   setPresentingDocument: (document: OnyxDocument) => void;
   removePadding?: boolean;
 }) => {
@@ -240,6 +243,7 @@ export const AIMessage = ({
         return preprocessLaTeX(content);
       }
     }
+    // return content;
 
     return (
       preprocessLaTeX(content) +
@@ -314,6 +318,7 @@ export const AIMessage = ({
       <MemoizedAnchor
         updatePresentingDocument={setPresentingDocument!}
         docs={docs}
+        href={props.href}
       >
         {props.children}
       </MemoizedAnchor>
@@ -345,7 +350,7 @@ export const AIMessage = ({
       a: anchorCallback,
       p: paragraphCallback,
       b: ({ node, className, children }: any) => {
-        return <span className={className}>||||{children}</span>;
+        return <span className={className}>{children}</span>;
       },
       code: ({ node, className, children }: any) => {
         const codeText = extractCodeText(
@@ -363,34 +368,25 @@ export const AIMessage = ({
     }),
     [anchorCallback, paragraphCallback, finalContent]
   );
+  const markdownRef = useRef<HTMLDivElement>(null);
+
+  // Process selection copying with HTML formatting
 
   const renderedMarkdown = useMemo(() => {
     if (typeof finalContent !== "string") {
       return finalContent;
     }
 
-    // Create a hidden div with the HTML content for copying
-    const htmlContent = markdownToHtml(finalContent);
-
     return (
-      <>
-        <div
-          style={{
-            position: "absolute",
-            left: "-9999px",
-            display: "none",
-          }}
-          dangerouslySetInnerHTML={{ __html: htmlContent }}
-        />
-        <ReactMarkdown
-          className="prose max-w-full text-base"
-          components={markdownComponents}
-          remarkPlugins={[remarkGfm, remarkMath]}
-          rehypePlugins={[[rehypePrism, { ignoreMissing: true }], rehypeKatex]}
-        >
-          {finalContent}
-        </ReactMarkdown>
-      </>
+      <ReactMarkdown
+        className="prose dark:prose-invert max-w-full text-base"
+        components={markdownComponents}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypePrism, { ignoreMissing: true }], rehypeKatex]}
+        urlTransform={transformLinkUri}
+      >
+        {finalContent}
+      </ReactMarkdown>
     );
   }, [finalContent, markdownComponents]);
 
@@ -495,7 +491,10 @@ export const AIMessage = ({
                     {docs && docs.length > 0 && (
                       <div
                         className={`mobile:hidden ${
-                          query && "mt-2"
+                          (query ||
+                            toolCall?.tool_name ===
+                              INTERNET_SEARCH_TOOL_NAME) &&
+                          "mt-2"
                         }  -mx-8 w-full mb-4 flex relative`}
                       >
                         <div className="w-full">
@@ -531,64 +530,9 @@ export const AIMessage = ({
                         {typeof content === "string" ? (
                           <div className="overflow-x-visible max-w-content-max">
                             <div
-                              contentEditable="true"
-                              suppressContentEditableWarning
+                              ref={markdownRef}
                               className="focus:outline-none cursor-text select-text"
-                              style={{
-                                MozUserModify: "read-only",
-                                WebkitUserModify: "read-only",
-                              }}
-                              onCopy={(e) => {
-                                e.preventDefault();
-                                const selection = window.getSelection();
-                                const selectedPlainText =
-                                  selection?.toString() || "";
-                                if (!selectedPlainText) {
-                                  // If no text is selected, copy the full content
-                                  const contentStr =
-                                    typeof content === "string"
-                                      ? content
-                                      : (
-                                          content as JSX.Element
-                                        ).props?.children?.toString() || "";
-                                  const clipboardItem = new ClipboardItem({
-                                    "text/html": new Blob(
-                                      [
-                                        typeof content === "string"
-                                          ? markdownToHtml(content)
-                                          : contentStr,
-                                      ],
-                                      { type: "text/html" }
-                                    ),
-                                    "text/plain": new Blob([contentStr], {
-                                      type: "text/plain",
-                                    }),
-                                  });
-                                  navigator.clipboard.write([clipboardItem]);
-                                  return;
-                                }
-
-                                const contentStr =
-                                  typeof content === "string"
-                                    ? content
-                                    : (
-                                        content as JSX.Element
-                                      ).props?.children?.toString() || "";
-                                const markdownText = getMarkdownForSelection(
-                                  contentStr,
-                                  selectedPlainText
-                                );
-                                const clipboardItem = new ClipboardItem({
-                                  "text/html": new Blob(
-                                    [markdownToHtml(markdownText)],
-                                    { type: "text/html" }
-                                  ),
-                                  "text/plain": new Blob([selectedPlainText], {
-                                    type: "text/plain",
-                                  }),
-                                });
-                                navigator.clipboard.write([clipboardItem]);
-                              }}
+                              onCopy={(e) => handleCopy(e, markdownRef)}
                             >
                               {renderedMarkdown}
                             </div>
@@ -639,13 +583,8 @@ export const AIMessage = ({
                           </div>
                           <CustomTooltip showTick line content="Copy">
                             <CopyButton
-                              content={
-                                typeof content === "string"
-                                  ? {
-                                      html: markdownToHtml(content),
-                                      plainText: content,
-                                    }
-                                  : content.toString()
+                              copyAllFn={() =>
+                                copyAll(finalContent as string, markdownRef)
                               }
                             />
                           </CustomTooltip>
@@ -730,13 +669,8 @@ export const AIMessage = ({
                           </div>
                           <CustomTooltip showTick line content="Copy">
                             <CopyButton
-                              content={
-                                typeof content === "string"
-                                  ? {
-                                      html: markdownToHtml(content),
-                                      plainText: content,
-                                    }
-                                  : content.toString()
+                              copyAllFn={() =>
+                                copyAll(finalContent as string, markdownRef)
                               }
                             />
                           </CustomTooltip>
@@ -795,27 +729,67 @@ function MessageSwitcher({
   totalPages,
   handlePrevious,
   handleNext,
+  disableForStreaming,
 }: {
   currentPage: number;
   totalPages: number;
   handlePrevious: () => void;
   handleNext: () => void;
+  disableForStreaming?: boolean;
 }) {
   return (
     <div className="flex items-center text-sm space-x-0.5">
-      <Hoverable
-        icon={FiChevronLeft}
-        onClick={currentPage === 1 ? undefined : handlePrevious}
-      />
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div>
+              <Hoverable
+                icon={FiChevronLeft}
+                onClick={
+                  disableForStreaming
+                    ? () => null
+                    : currentPage === 1
+                      ? undefined
+                      : handlePrevious
+                }
+              />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            {disableForStreaming
+              ? "Wait for agent message to complete"
+              : "Previous"}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
 
       <span className="text-text-darker select-none">
         {currentPage} / {totalPages}
       </span>
 
-      <Hoverable
-        icon={FiChevronRight}
-        onClick={currentPage === totalPages ? undefined : handleNext}
-      />
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger>
+            <div>
+              <Hoverable
+                icon={FiChevronRight}
+                onClick={
+                  disableForStreaming
+                    ? () => null
+                    : currentPage === totalPages
+                      ? undefined
+                      : handleNext
+                }
+              />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>
+            {disableForStreaming
+              ? "Wait for agent message to complete"
+              : "Next"}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   );
 }
@@ -829,6 +803,7 @@ export const HumanMessage = ({
   onMessageSelection,
   shared,
   stopGenerating = () => null,
+  disableSwitchingForStreaming = false,
 }: {
   shared?: boolean;
   content: string;
@@ -838,6 +813,7 @@ export const HumanMessage = ({
   onEdit?: (editedContent: string) => void;
   onMessageSelection?: (messageId: number) => void;
   stopGenerating?: () => void;
+  disableSwitchingForStreaming?: boolean;
 }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -1067,6 +1043,7 @@ export const HumanMessage = ({
               otherMessagesCanSwitchTo.length > 1 && (
                 <div className="ml-auto mr-3">
                   <MessageSwitcher
+                    disableForStreaming={disableSwitchingForStreaming}
                     currentPage={currentMessageInd + 1}
                     totalPages={otherMessagesCanSwitchTo.length}
                     handlePrevious={() => {

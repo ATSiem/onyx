@@ -41,6 +41,7 @@ from sqlalchemy import and_
 from onyx.configs.constants import INDEX_SEPARATOR
 from onyx.context.search.models import IndexFilters
 from onyx.context.search.models import SearchRequest
+from onyx.db.engine import get_session_with_current_tenant
 from onyx.db.engine import get_session_with_tenant
 from onyx.db.models import ConnectorCredentialPair
 from onyx.db.models import Document
@@ -64,6 +65,7 @@ from onyx.document_index.vespa_constants import VESPA_APPLICATION_ENDPOINT
 from onyx.utils.logger import setup_logger
 from shared_configs.configs import MULTI_TENANT
 from shared_configs.configs import POSTGRES_DEFAULT_SCHEMA
+from shared_configs.contextvars import CURRENT_TENANT_ID_CONTEXTVAR
 
 logger = setup_logger()
 
@@ -205,7 +207,7 @@ def query_vespa(
     yql: str, tenant_id: Optional[str] = None, limit: int = 10
 ) -> List[Dict[str, Any]]:
     # Perform a Vespa query using YQL syntax.
-    filters = IndexFilters(tenant_id=tenant_id, access_control_list=[])
+    filters = IndexFilters(tenant_id=None, access_control_list=[])
     filter_string = build_vespa_filters(filters, remove_trailing_and=True)
     full_yql = yql.strip()
     if filter_string:
@@ -258,7 +260,7 @@ def get_documents_for_tenant_connector(
 def search_for_document(
     index_name: str,
     document_id: str | None = None,
-    tenant_id: str | None = None,
+    tenant_id: str = POSTGRES_DEFAULT_SCHEMA,
     max_hits: int | None = 10,
 ) -> List[Dict[str, Any]]:
     yql_query = f"select * from sources {index_name}"
@@ -470,10 +472,8 @@ def get_document_acls(
             print("-" * 80)
 
 
-def get_current_chunk_count(
-    document_id: str, index_name: str, tenant_id: str
-) -> int | None:
-    with get_session_with_tenant(tenant_id=tenant_id) as session:
+def get_current_chunk_count(document_id: str) -> int | None:
+    with get_session_with_current_tenant() as session:
         return (
             session.query(Document.chunk_count)
             .filter(Document.id == document_id)
@@ -484,7 +484,7 @@ def get_current_chunk_count(
 def get_number_of_chunks_we_think_exist(
     document_id: str, index_name: str, tenant_id: str
 ) -> int:
-    current_chunk_count = get_current_chunk_count(document_id, index_name, tenant_id)
+    current_chunk_count = get_current_chunk_count(document_id)
     print(f"Current chunk count: {current_chunk_count}")
 
     doc_info = VespaIndex.enrich_basic_chunk_info(
@@ -505,15 +505,16 @@ def get_number_of_chunks_we_think_exist(
 
 class VespaDebugging:
     # Class for managing Vespa debugging actions.
-    def __init__(self, tenant_id: str | None = None):
-        self.tenant_id = POSTGRES_DEFAULT_SCHEMA if not tenant_id else tenant_id
+    def __init__(self, tenant_id: str = POSTGRES_DEFAULT_SCHEMA):
+        CURRENT_TENANT_ID_CONTEXTVAR.set(tenant_id)
+        self.tenant_id = tenant_id
         self.index_name = get_index_name(self.tenant_id)
 
     def sample_document_counts(self) -> None:
         # Sample random documents and compare chunk counts
         mismatches = []
         no_chunks = []
-        with get_session_with_tenant(tenant_id=self.tenant_id) as session:
+        with get_session_with_current_tenant() as session:
             # Get a sample of random documents
             from sqlalchemy import func
 
@@ -600,7 +601,7 @@ class VespaDebugging:
         delete_documents_for_tenant(self.index_name, self.tenant_id, count=count)
 
     def search_for_document(
-        self, document_id: str | None = None, tenant_id: str | None = None
+        self, document_id: str | None = None, tenant_id: str = POSTGRES_DEFAULT_SCHEMA
     ) -> List[Dict[str, Any]]:
         return search_for_document(self.index_name, document_id, tenant_id)
 
@@ -632,6 +633,7 @@ def delete_where(
     """
     Removes visited documents in `cluster` where the given selection
     is true, using Vespa's 'delete where' endpoint.
+
 
     :param index_name: Typically <namespace>/<document-type> from your schema
     :param selection:  The selection string, e.g., "true" or "foo contains 'bar'"
@@ -796,6 +798,7 @@ def main() -> None:
     args = parser.parse_args()
     vespa_debug = VespaDebugging(args.tenant_id)
 
+    CURRENT_TENANT_ID_CONTEXTVAR.set(args.tenant_id or "public")
     if args.action == "delete-all-documents":
         if not args.tenant_id:
             parser.error("--tenant-id is required for delete-all-documents action")

@@ -1,6 +1,11 @@
 "use client";
 
-import { redirect, useRouter, useSearchParams } from "next/navigation";
+import {
+  redirect,
+  usePathname,
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 import {
   BackendChatSession,
   BackendMessage,
@@ -18,6 +23,7 @@ import {
   SubQuestionDetail,
   constructSubQuestions,
   DocumentsResponse,
+  AgenticMessageResponseIDInfo,
 } from "./interfaces";
 
 import Prism from "prismjs";
@@ -41,6 +47,7 @@ import {
   removeMessage,
   sendMessage,
   setMessageAsLatest,
+  updateLlmOverrideForChatSession,
   updateParentChildren,
   uploadFilesForChat,
   useScrollonStream,
@@ -49,6 +56,7 @@ import {
   Dispatch,
   SetStateAction,
   use,
+  useCallback,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -59,7 +67,7 @@ import {
 import { usePopup } from "@/components/admin/connectors/Popup";
 import { SEARCH_PARAM_NAMES, shouldSubmitOnLoad } from "./searchParams";
 import { useDocumentSelection } from "./useDocumentSelection";
-import { LlmOverride, useFilters, useLlmOverride } from "@/lib/hooks";
+import { LlmDescriptor, useFilters, useLlmManager } from "@/lib/hooks";
 import { ChatState, FeedbackType, RegenerationState } from "./types";
 import { DocumentResults } from "./documentSidebar/DocumentResults";
 import { OnyxInitializingLoader } from "@/components/OnyxInitializingLoader";
@@ -83,7 +91,11 @@ import {
 import { buildFilters } from "@/lib/search/utils";
 import { SettingsContext } from "@/components/settings/SettingsProvider";
 import Dropzone from "react-dropzone";
-import { checkLLMSupportsImageInput, getFinalLLM } from "@/lib/llm/utils";
+import {
+  checkLLMSupportsImageInput,
+  getFinalLLM,
+  structureValue,
+} from "@/lib/llm/utils";
 import { ChatInputBar } from "./input/ChatInputBar";
 import { useChatContext } from "@/components/context/ChatContext";
 import { v4 as uuidv4 } from "uuid";
@@ -97,7 +109,6 @@ import {
 } from "@/components/resizable/constants";
 import FixedLogo from "../../components/logo/FixedLogo";
 
-import { MinimalMarkdown } from "@/components/chat/MinimalMarkdown";
 import ExceptionTraceModal from "@/components/modals/ExceptionTraceModal";
 
 import {
@@ -120,16 +131,12 @@ import {
 
 import { getSourceMetadata } from "@/lib/sources";
 import { UserSettingsModal } from "./modal/UserSettingsModal";
-import { AlignStartVertical } from "lucide-react";
 import { AgenticMessage } from "./message/AgenticMessage";
 import AssistantModal from "../assistants/mine/AssistantModal";
-import {
-  OperatingSystem,
-  useOperatingSystem,
-  useSidebarShortcut,
-} from "@/lib/browserUtilities";
-import { Button } from "@/components/ui/button";
-import { ConfirmEntityModal } from "@/components/modals/ConfirmEntityModal";
+import { useSidebarShortcut } from "@/lib/browserUtilities";
+import { ChatSearchModal } from "./chat_search/ChatSearchModal";
+import { ErrorBanner } from "./message/Resubmit";
+import MinimalMarkdown from "@/components/chat/MinimalMarkdown";
 
 const TEMP_USER_MESSAGE_ID = -1;
 const TEMP_ASSISTANT_MESSAGE_ID = -2;
@@ -187,16 +194,6 @@ export function ChatPage({
     return screenSize;
   }
 
-  const { height: screenHeight } = useScreenSize();
-
-  const getContainerHeight = () => {
-    if (autoScrollEnabled) return undefined;
-
-    if (screenHeight < 600) return "20vh";
-    if (screenHeight < 1200) return "30vh";
-    return "40vh";
-  };
-
   // handle redirect if chat page is disabled
   // NOTE: this must be done here, in a client component since
   // settings are passed in via Context and therefore aren't
@@ -206,7 +203,6 @@ export function ChatPage({
 
   const [documentSidebarVisible, setDocumentSidebarVisible] = useState(false);
   const [proSearchEnabled, setProSearchEnabled] = useState(proSearchToggled);
-  const [streamingAllowed, setStreamingAllowed] = useState(false);
   const toggleProSearch = () => {
     Cookies.set(
       PRO_SEARCH_TOGGLED_COOKIE_NAME,
@@ -215,13 +211,10 @@ export function ChatPage({
     setProSearchEnabled(!proSearchEnabled);
   };
 
+  const isInitialLoad = useRef(true);
   const [userSettingsToggled, setUserSettingsToggled] = useState(false);
 
-  const {
-    assistants: availableAssistants,
-    finalAssistants,
-    pinnedAssistants,
-  } = useAssistants();
+  const { assistants: availableAssistants, pinnedAssistants } = useAssistants();
 
   const [showApiKeyModal, setShowApiKeyModal] = useState(
     !shouldShowWelcomeModal
@@ -231,7 +224,7 @@ export function ChatPage({
   const slackChatId = searchParams.get("slackChatId");
   const existingChatIdRaw = searchParams.get("chatId");
 
-  const [showHistorySidebar, setShowHistorySidebar] = useState(false); // State to track if sidebar is open
+  const [showHistorySidebar, setShowHistorySidebar] = useState(false);
 
   const existingChatSessionId = existingChatIdRaw ? existingChatIdRaw : null;
 
@@ -349,7 +342,7 @@ export function ChatPage({
     ]
   );
 
-  const llmOverrideManager = useLlmOverride(
+  const llmManager = useLlmManager(
     llmProviders,
     selectedChatSession,
     liveAssistant
@@ -513,8 +506,17 @@ export function ChatPage({
       scrollInitialized.current = false;
 
       if (!hasPerformedInitialScroll) {
+        if (isInitialLoad.current) {
+          setHasPerformedInitialScroll(true);
+          isInitialLoad.current = false;
+        }
         clientScrollToBottom();
+
+        setTimeout(() => {
+          setHasPerformedInitialScroll(true);
+        }, 100);
       } else if (isChatSessionSwitch) {
+        setHasPerformedInitialScroll(true);
         clientScrollToBottom(true);
       }
 
@@ -858,6 +860,7 @@ export function ChatPage({
   }, [liveAssistant]);
 
   const filterManager = useFilters();
+  const [isChatSearchModalOpen, setIsChatSearchModalOpen] = useState(false);
 
   const [currentFeedback, setCurrentFeedback] = useState<
     [FeedbackType, number] | null
@@ -878,24 +881,6 @@ export function ChatPage({
     inputRef.current?.getBoundingClientRect().height!
   );
   const scrollDist = useRef<number>(0);
-
-  const updateScrollTracking = () => {
-    const scrollDistance =
-      endDivRef?.current?.getBoundingClientRect()?.top! -
-      inputRef?.current?.getBoundingClientRect()?.top!;
-    scrollDist.current = scrollDistance;
-    setAboveHorizon(scrollDist.current > 500);
-  };
-
-  useEffect(() => {
-    const scrollableDiv = scrollableDivRef.current;
-    if (scrollableDiv) {
-      scrollableDiv.addEventListener("scroll", updateScrollTracking);
-      return () => {
-        scrollableDiv.removeEventListener("scroll", updateScrollTracking);
-      };
-    }
-  }, []);
 
   const handleInputResize = () => {
     setTimeout(() => {
@@ -948,33 +933,12 @@ export function ChatPage({
       if (isVisible) return;
 
       // Check if all messages are currently rendered
-      if (currentVisibleRange.end < messageHistory.length) {
-        // Update visible range to include the last messages
-        updateCurrentVisibleRange({
-          start: Math.max(
-            0,
-            messageHistory.length -
-              (currentVisibleRange.end - currentVisibleRange.start)
-          ),
-          end: messageHistory.length,
-          mostVisibleMessageId: currentVisibleRange.mostVisibleMessageId,
-        });
+      // If all messages are already rendered, scroll immediately
+      endDivRef.current.scrollIntoView({
+        behavior: fast ? "auto" : "smooth",
+      });
 
-        // Wait for the state update and re-render before scrolling
-        setTimeout(() => {
-          endDivRef.current?.scrollIntoView({
-            behavior: fast ? "auto" : "smooth",
-          });
-          setHasPerformedInitialScroll(true);
-        }, 100);
-      } else {
-        // If all messages are already rendered, scroll immediately
-        endDivRef.current.scrollIntoView({
-          behavior: fast ? "auto" : "smooth",
-        });
-
-        setHasPerformedInitialScroll(true);
-      }
+      setHasPerformedInitialScroll(true);
     }, 50);
 
     // Reset waitForScrollRef after 1.5 seconds
@@ -994,11 +958,6 @@ export function ChatPage({
   useEffect(() => {
     handleInputResize();
   }, [message]);
-
-  // tracks scrolling
-  useEffect(() => {
-    updateScrollTracking();
-  }, [messageHistory]);
 
   // used for resizing of the document sidebar
   const masterFlexboxRef = useRef<HTMLDivElement>(null);
@@ -1123,6 +1082,56 @@ export function ChatPage({
     });
   };
   const [uncaughtError, setUncaughtError] = useState<string | null>(null);
+  const [agenticGenerating, setAgenticGenerating] = useState(false);
+
+  const autoScrollEnabled =
+    (user?.preferences?.auto_scroll && !agenticGenerating) ?? false;
+
+  useScrollonStream({
+    chatState: currentSessionChatState,
+    scrollableDivRef,
+    scrollDist,
+    endDivRef,
+    debounceNumber,
+    mobile: settings?.isMobile,
+    enableAutoScroll: autoScrollEnabled,
+  });
+
+  // Track whether a message has been sent during this page load, keyed by chat session id
+  const [sessionHasSentLocalUserMessage, setSessionHasSentLocalUserMessage] =
+    useState<Map<string | null, boolean>>(new Map());
+
+  // Update the local state for a session once the user sends a message
+  const markSessionMessageSent = (sessionId: string | null) => {
+    setSessionHasSentLocalUserMessage((prev) => {
+      const newMap = new Map(prev);
+      newMap.set(sessionId, true);
+      return newMap;
+    });
+  };
+  const currentSessionHasSentLocalUserMessage = useMemo(
+    () => (sessionId: string | null) => {
+      return sessionHasSentLocalUserMessage.size === 0
+        ? undefined
+        : sessionHasSentLocalUserMessage.get(sessionId) || false;
+    },
+    [sessionHasSentLocalUserMessage]
+  );
+
+  const { height: screenHeight } = useScreenSize();
+
+  const getContainerHeight = useMemo(() => {
+    return () => {
+      if (!currentSessionHasSentLocalUserMessage(chatSessionIdRef.current)) {
+        return undefined;
+      }
+      if (autoScrollEnabled) return undefined;
+
+      if (screenHeight < 600) return "40vh";
+      if (screenHeight < 1200) return "50vh";
+      return "60vh";
+    };
+  }, [autoScrollEnabled, screenHeight, currentSessionHasSentLocalUserMessage]);
 
   const onSubmit = async ({
     messageIdToResend,
@@ -1131,7 +1140,7 @@ export function ChatPage({
     forceSearch,
     isSeededChat,
     alternativeAssistantOverride = null,
-    modelOverRide,
+    modelOverride,
     regenerationRequest,
     overrideFileDescriptors,
   }: {
@@ -1141,12 +1150,17 @@ export function ChatPage({
     forceSearch?: boolean;
     isSeededChat?: boolean;
     alternativeAssistantOverride?: Persona | null;
-    modelOverRide?: LlmOverride;
+    modelOverride?: LlmDescriptor;
     regenerationRequest?: RegenerationRequest | null;
     overrideFileDescriptors?: FileDescriptor[];
   } = {}) => {
+    navigatingAway.current = false;
     let frozenSessionId = currentSessionId();
     updateCanContinue(false, frozenSessionId);
+    setUncaughtError(null);
+
+    // Mark that we've sent a message for this session in the current page load
+    markSessionMessageSent(frozenSessionId);
 
     if (currentChatState() != "input") {
       if (currentChatState() == "uploading") {
@@ -1183,6 +1197,22 @@ export function ChatPage({
       currChatSessionId = chatSessionIdRef.current as string;
     }
     frozenSessionId = currChatSessionId;
+    // update the selected model for the chat session if one is specified so that
+    // it persists across page reloads. Do not `await` here so that the message
+    // request can continue and this will just happen in the background.
+    // NOTE: only set the model override for the chat session once we send a
+    // message with it. If the user switches models and then starts a new
+    // chat session, it is unexpected for that model to be used when they
+    // return to this session the next day.
+    let finalLLM = modelOverride || llmManager.currentLlm;
+    updateLlmOverrideForChatSession(
+      currChatSessionId,
+      structureValue(
+        finalLLM.name || "",
+        finalLLM.provider || "",
+        finalLLM.modelName || ""
+      )
+    );
 
     updateStatesWithNewSessionId(currChatSessionId);
 
@@ -1242,11 +1272,14 @@ export function ChatPage({
         : null) ||
       (messageMap.size === 1 ? Array.from(messageMap.values())[0] : null);
 
-    const currentAssistantId = alternativeAssistantOverride
-      ? alternativeAssistantOverride.id
-      : alternativeAssistant
-        ? alternativeAssistant.id
-        : liveAssistant.id;
+    let currentAssistantId;
+    if (alternativeAssistantOverride) {
+      currentAssistantId = alternativeAssistantOverride.id;
+    } else if (alternativeAssistant) {
+      currentAssistantId = alternativeAssistant.id;
+    } else {
+      currentAssistantId = liveAssistant.id;
+    }
 
     resetInputBar();
     let messageUpdates: Message[] | null = null;
@@ -1267,13 +1300,15 @@ export function ChatPage({
     let stackTrace: string | null = null;
 
     let sub_questions: SubQuestionDetail[] = [];
-    let second_level_sub_questions: SubQuestionDetail[] = [];
     let is_generating: boolean = false;
     let second_level_generating: boolean = false;
     let finalMessage: BackendMessage | null = null;
     let toolCall: ToolCallMetadata | null = null;
     let isImprovement: boolean | undefined = undefined;
     let isStreamingQuestions = true;
+    let includeAgentic = false;
+    let secondLevelMessageId: number | null = null;
+    let isAgentic: boolean = false;
 
     let initialFetchDetails: null | {
       user_message_id: number;
@@ -1290,8 +1325,9 @@ export function ChatPage({
         getLastSuccessfulMessageId(currMessageHistory) || systemMessage;
 
       const stack = new CurrentMessageFIFO();
+
       updateCurrentMessageFIFO(stack, {
-        signal: controller.signal, // Add this line
+        signal: controller.signal,
         message: currMessage,
         alternateAssistantId: currentAssistantId,
         fileDescriptors: overrideFileDescriptors || currentMessageFiles,
@@ -1316,20 +1352,18 @@ export function ChatPage({
         forceSearch,
         regenerate: regenerationRequest !== undefined,
         modelProvider:
-          modelOverRide?.name ||
-          llmOverrideManager.llmOverride.name ||
-          undefined,
+          modelOverride?.name || llmManager.currentLlm.name || undefined,
         modelVersion:
-          modelOverRide?.modelName ||
-          llmOverrideManager.llmOverride.modelName ||
+          modelOverride?.modelName ||
+          llmManager.currentLlm.modelName ||
           searchParams.get(SEARCH_PARAM_NAMES.MODEL_VERSION) ||
           undefined,
-        temperature: llmOverrideManager.temperature || undefined,
+        temperature: llmManager.temperature || undefined,
         systemPromptOverride:
           searchParams.get(SEARCH_PARAM_NAMES.SYSTEM_PROMPT) || undefined,
         useExistingUserMessage: isSeededChat,
         useLanggraph:
-          !settings?.settings.pro_search_disabled &&
+          settings?.settings.pro_search_enabled &&
           proSearchEnabled &&
           retrievalEnabled,
       });
@@ -1410,6 +1444,17 @@ export function ChatPage({
             resetRegenerationState();
           } else {
             const { user_message_id, frozenMessageMap } = initialFetchDetails;
+            if (Object.hasOwn(packet, "agentic_message_ids")) {
+              const agenticMessageIds = (packet as AgenticMessageResponseIDInfo)
+                .agentic_message_ids;
+              const level1MessageId = agenticMessageIds.find(
+                (item) => item.level === 1
+              )?.message_id;
+              if (level1MessageId) {
+                secondLevelMessageId = level1MessageId;
+                includeAgentic = true;
+              }
+            }
 
             setChatState((prevState) => {
               if (prevState.get(chatSessionIdRef.current!) === "loading") {
@@ -1425,6 +1470,9 @@ export function ChatPage({
               if ((packet as any).level === 1) {
                 second_level_generating = true;
               }
+            }
+            if (Object.hasOwn(packet, "is_agentic")) {
+              isAgentic = (packet as any).is_agentic;
             }
 
             if (Object.hasOwn(packet, "refined_answer_improvement")) {
@@ -1459,6 +1507,7 @@ export function ChatPage({
               );
             } else if (Object.hasOwn(packet, "sub_question")) {
               updateChatState("toolBuilding", frozenSessionId);
+              isAgentic = true;
               is_generating = true;
               sub_questions = constructSubQuestions(
                 sub_questions,
@@ -1561,7 +1610,10 @@ export function ChatPage({
                   };
                 }
               );
-            } else if (Object.hasOwn(packet, "error")) {
+            } else if (
+              Object.hasOwn(packet, "error") &&
+              (packet as any).error != null
+            ) {
               if (
                 sub_questions.length > 0 &&
                 sub_questions
@@ -1573,8 +1625,8 @@ export function ChatPage({
                 setAgenticGenerating(false);
                 setAlternativeGeneratingAssistant(null);
                 setSubmittedMessage("");
-                return;
-                // throw new Error((packet as StreamingError).error);
+
+                throw new Error((packet as StreamingError).error);
               } else {
                 error = (packet as StreamingError).error;
                 stackTrace = (packet as StreamingError).stack_trace;
@@ -1656,7 +1708,21 @@ export function ChatPage({
                 sub_questions: sub_questions,
                 second_level_generating: second_level_generating,
                 agentic_docs: agenticDocs,
+                is_agentic: isAgentic,
               },
+              ...(includeAgentic
+                ? [
+                    {
+                      messageId: secondLevelMessageId!,
+                      message: second_level_answer,
+                      type: "assistant" as const,
+                      files: [],
+                      toolCall: null,
+                      parentMessageId:
+                        initialFetchDetails.assistant_message_id!,
+                    },
+                  ]
+                : []),
             ]);
           }
         }
@@ -1712,7 +1778,10 @@ export function ChatPage({
         const newUrl = buildChatUrl(searchParams, currChatSessionId, null);
         // newUrl is like /chat?chatId=10
         // current page is like /chat
-        router.push(newUrl, { scroll: false });
+
+        if (pathname == "/chat" && !navigatingAway.current) {
+          router.push(newUrl, { scroll: false });
+        }
       }
     }
     if (
@@ -1762,7 +1831,7 @@ export function ChatPage({
     const [_, llmModel] = getFinalLLM(
       llmProviders,
       liveAssistant,
-      llmOverrideManager.llmOverride
+      llmManager.currentLlm
     );
     const llmAcceptsImages = checkLLMSupportsImageInput(llmModel);
 
@@ -1817,7 +1886,6 @@ export function ChatPage({
   // Used to maintain a "time out" for history sidebar so our existing refs can have time to process change
   const [untoggled, setUntoggled] = useState(false);
   const [loadingError, setLoadingError] = useState<string | null>(null);
-  const [agenticGenerating, setAgenticGenerating] = useState(false);
 
   const explicitlyUntoggle = () => {
     setShowHistorySidebar(false);
@@ -1859,139 +1927,8 @@ export function ChatPage({
     isAnonymousUser: user?.is_anonymous_user,
   });
 
-  const autoScrollEnabled =
-    user?.preferences?.auto_scroll == null
-      ? settings?.enterpriseSettings?.auto_scroll || false
-      : user?.preferences?.auto_scroll! && !agenticGenerating;
-
-  useScrollonStream({
-    chatState: currentSessionChatState,
-    scrollableDivRef,
-    scrollDist,
-    endDivRef,
-    debounceNumber,
-    mobile: settings?.isMobile,
-    enableAutoScroll: autoScrollEnabled,
-  });
-
   // Virtualization + Scrolling related effects and functions
   const scrollInitialized = useRef(false);
-  interface VisibleRange {
-    start: number;
-    end: number;
-    mostVisibleMessageId: number | null;
-  }
-
-  const [visibleRange, setVisibleRange] = useState<
-    Map<string | null, VisibleRange>
-  >(() => {
-    const initialRange: VisibleRange = {
-      start: 0,
-      end: BUFFER_COUNT,
-      mostVisibleMessageId: null,
-    };
-    return new Map([[chatSessionIdRef.current, initialRange]]);
-  });
-
-  // Function used to update current visible range. Only method for updating `visibleRange` state.
-  const updateCurrentVisibleRange = (
-    newRange: VisibleRange,
-    forceUpdate?: boolean
-  ) => {
-    if (
-      scrollInitialized.current &&
-      visibleRange.get(loadedIdSessionRef.current) == undefined &&
-      !forceUpdate
-    ) {
-      return;
-    }
-
-    setVisibleRange((prevState) => {
-      const newState = new Map(prevState);
-      newState.set(loadedIdSessionRef.current, newRange);
-      return newState;
-    });
-  };
-
-  //  Set first value for visibleRange state on page load / refresh.
-  const initializeVisibleRange = () => {
-    const upToDatemessageHistory = buildLatestMessageChain(
-      currentMessageMap(completeMessageDetail)
-    );
-
-    if (!scrollInitialized.current && upToDatemessageHistory.length > 0) {
-      const newEnd = Math.max(upToDatemessageHistory.length, BUFFER_COUNT);
-      const newStart = Math.max(0, newEnd - BUFFER_COUNT);
-      const newMostVisibleMessageId =
-        upToDatemessageHistory[newEnd - 1]?.messageId;
-
-      updateCurrentVisibleRange(
-        {
-          start: newStart,
-          end: newEnd,
-          mostVisibleMessageId: newMostVisibleMessageId,
-        },
-        true
-      );
-      scrollInitialized.current = true;
-    }
-  };
-
-  const updateVisibleRangeBasedOnScroll = () => {
-    if (!scrollInitialized.current) return;
-    const scrollableDiv = scrollableDivRef.current;
-    if (!scrollableDiv) return;
-
-    const viewportHeight = scrollableDiv.clientHeight;
-    let mostVisibleMessageIndex = -1;
-
-    messageHistory.forEach((message, index) => {
-      const messageElement = document.getElementById(
-        `message-${message.messageId}`
-      );
-      if (messageElement) {
-        const rect = messageElement.getBoundingClientRect();
-        const isVisible = rect.bottom <= viewportHeight && rect.bottom > 0;
-        if (isVisible && index > mostVisibleMessageIndex) {
-          mostVisibleMessageIndex = index;
-        }
-      }
-    });
-
-    if (mostVisibleMessageIndex !== -1) {
-      const startIndex = Math.max(0, mostVisibleMessageIndex - BUFFER_COUNT);
-      const endIndex = Math.min(
-        messageHistory.length,
-        mostVisibleMessageIndex + BUFFER_COUNT + 1
-      );
-
-      updateCurrentVisibleRange({
-        start: startIndex,
-        end: endIndex,
-        mostVisibleMessageId: messageHistory[mostVisibleMessageIndex].messageId,
-      });
-    }
-  };
-
-  useEffect(() => {
-    initializeVisibleRange();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [router, messageHistory]);
-
-  useLayoutEffect(() => {
-    const scrollableDiv = scrollableDivRef.current;
-
-    const handleScroll = () => {
-      updateVisibleRangeBasedOnScroll();
-    };
-
-    scrollableDiv?.addEventListener("scroll", handleScroll);
-
-    return () => {
-      scrollableDiv?.removeEventListener("scroll", handleScroll);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messageHistory]);
 
   const imageFileInMessageHistory = useMemo(() => {
     return messageHistory
@@ -2001,11 +1938,6 @@ export function ChatPage({
       );
   }, [messageHistory]);
 
-  const currentVisibleRange = visibleRange.get(currentSessionId()) || {
-    start: 0,
-    end: 0,
-    mostVisibleMessageId: null,
-  };
   useSendMessageToParent();
 
   useEffect(() => {
@@ -2041,9 +1973,16 @@ export function ChatPage({
 
   const innerSidebarElementRef = useRef<HTMLDivElement>(null);
   const [settingsToggled, setSettingsToggled] = useState(false);
-  const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
-
   const currentPersona = alternativeAssistant || liveAssistant;
+
+  const HORIZON_DISTANCE = 800;
+  const handleScroll = useCallback(() => {
+    const scrollDistance =
+      endDivRef?.current?.getBoundingClientRect()?.top! -
+      inputRef?.current?.getBoundingClientRect()?.top!;
+    scrollDist.current = scrollDistance;
+    setAboveHorizon(scrollDist.current > HORIZON_DISTANCE);
+  }, []);
 
   useEffect(() => {
     const handleSlackChatRedirect = async () => {
@@ -2083,13 +2022,58 @@ export function ChatPage({
   }, [searchParams, router]);
 
   useEffect(() => {
-    llmOverrideManager.updateImageFilesPresent(imageFileInMessageHistory);
+    llmManager.updateImageFilesPresent(imageFileInMessageHistory);
   }, [imageFileInMessageHistory]);
+
+  const pathname = usePathname();
+  useEffect(() => {
+    return () => {
+      // Cleanup which only runs when the component unmounts (i.e. when you navigate away).
+      const currentSession = currentSessionId();
+      const controller = abortControllersRef.current.get(currentSession);
+      if (controller) {
+        controller.abort();
+        navigatingAway.current = true;
+        setAbortControllers((prev) => {
+          const newControllers = new Map(prev);
+          newControllers.delete(currentSession);
+          return newControllers;
+        });
+      }
+    };
+  }, [pathname]);
+
+  const navigatingAway = useRef(false);
+  // Keep a ref to abortControllers to ensure we always have the latest value
+  const abortControllersRef = useRef(abortControllers);
+  useEffect(() => {
+    abortControllersRef.current = abortControllers;
+  }, [abortControllers]);
 
   useSidebarShortcut(router, toggleSidebar);
 
   const [sharedChatSession, setSharedChatSession] =
     useState<ChatSession | null>();
+
+  const handleResubmitLastMessage = () => {
+    // Grab the last user-type message
+    const lastUserMsg = messageHistory
+      .slice()
+      .reverse()
+      .find((m) => m.type === "user");
+    if (!lastUserMsg) {
+      setPopup({
+        message: "No previously-submitted user message found.",
+        type: "error",
+      });
+      return;
+    }
+    // We call onSubmit, passing a `messageOverride`
+    onSubmit({
+      messageIdToResend: lastUserMsg.messageId,
+      messageOverride: lastUserMsg.message,
+    });
+  };
 
   const showShareModal = (chatSession: ChatSession) => {
     setSharedChatSession(chatSession);
@@ -2112,9 +2096,9 @@ export function ChatPage({
 
   function createRegenerator(regenerationRequest: RegenerationRequest) {
     // Returns new function that only needs `modelOverRide` to be specified when called
-    return async function (modelOverRide: LlmOverride) {
+    return async function (modelOverride: LlmDescriptor) {
       return await onSubmit({
-        modelOverRide,
+        modelOverride,
         messageIdToResend: regenerationRequest.parentMessage.messageId,
         regenerationRequest,
         forceSearch: regenerationRequest.forceSearch,
@@ -2150,32 +2134,6 @@ export function ChatPage({
 
       <ChatPopup />
 
-      {showDeleteAllModal && (
-        <ConfirmEntityModal
-          entityType="All Chats"
-          entityName="all your chat sessions"
-          onClose={() => setShowDeleteAllModal(false)}
-          additionalDetails="This action cannot be undone. All your chat sessions will be deleted."
-          onSubmit={async () => {
-            const response = await deleteAllChatSessions("Chat");
-            if (response.ok) {
-              setShowDeleteAllModal(false);
-              setPopup({
-                message: "All your chat sessions have been deleted.",
-                type: "success",
-              });
-              refreshChatSessions();
-              router.push("/chat");
-            } else {
-              setPopup({
-                message: "Failed to delete all chat sessions.",
-                type: "error",
-              });
-            }
-          }}
-        />
-      )}
-
       {currentFeedback && (
         <FeedbackModal
           feedbackType={currentFeedback[0]}
@@ -2195,9 +2153,7 @@ export function ChatPage({
       {(settingsToggled || userSettingsToggled) && (
         <UserSettingsModal
           setPopup={setPopup}
-          setLlmOverride={(newOverride) =>
-            llmOverrideManager.updateLLMOverride(newOverride)
-          }
+          setCurrentLlm={(newLlm) => llmManager.updateCurrentLlm(newLlm)}
           defaultModel={user?.preferences.default_model!}
           llmProviders={llmProviders}
           onClose={() => {
@@ -2206,6 +2162,11 @@ export function ChatPage({
           }}
         />
       )}
+
+      <ChatSearchModal
+        open={isChatSearchModalOpen}
+        onCloseModal={() => setIsChatSearchModalOpen(false)}
+      />
 
       {retrievalEnabled && documentSidebarVisible && settings?.isMobile && (
         <div className="md:hidden">
@@ -2261,7 +2222,7 @@ export function ChatPage({
         <ShareChatSessionModal
           assistantId={liveAssistant?.id}
           message={message}
-          modelOverride={llmOverrideManager.llmOverride}
+          modelOverride={llmManager.currentLlm}
           chatSessionId={sharedChatSession.id}
           existingSharedStatus={sharedChatSession.shared_status}
           onClose={() => setSharedChatSession(null)}
@@ -2279,7 +2240,7 @@ export function ChatPage({
         <ShareChatSessionModal
           message={message}
           assistantId={liveAssistant?.id}
-          modelOverride={llmOverrideManager.llmOverride}
+          modelOverride={llmManager.currentLlm}
           chatSessionId={chatSessionIdRef.current}
           existingSharedStatus={chatSessionSharedStatus}
           onClose={() => setSharingModalVisible(false)}
@@ -2300,7 +2261,7 @@ export function ChatPage({
                 fixed
                 left-0
                 z-40
-                bg-background-100
+                bg-neutral-200
                 h-screen
                 transition-all
                 bg-opacity-80
@@ -2314,6 +2275,9 @@ export function ChatPage({
             >
               <div className="w-full relative">
                 <HistorySidebar
+                  toggleChatSessionSearchModal={() =>
+                    setIsChatSearchModalOpen((open) => !open)
+                  }
                   liveAssistant={liveAssistant}
                   setShowAssistantsModal={setShowAssistantsModal}
                   explicitlyUntoggle={explicitlyUntoggle}
@@ -2327,9 +2291,9 @@ export function ChatPage({
                   folders={folders}
                   removeToggle={removeToggle}
                   showShareModal={showShareModal}
-                  showDeleteAllModal={() => setShowDeleteAllModal(true)}
                 />
               </div>
+
               <div
                 className={`
                 flex-none
@@ -2463,6 +2427,7 @@ export function ChatPage({
                         {...getRootProps()}
                       >
                         <div
+                          onScroll={handleScroll}
                           className={`w-full h-[calc(100vh-160px)] flex flex-col default-scrollbar overflow-y-auto overflow-x-hidden relative`}
                           ref={scrollableDivRef}
                         >
@@ -2481,7 +2446,7 @@ export function ChatPage({
                                   h-full
                                   ${sidebarVisible ? "w-[200px]" : "w-[0px]"}
                               `}
-                                ></div>
+                                />
                               )}
                             </div>
                           )}
@@ -2509,6 +2474,7 @@ export function ChatPage({
                             style={{ overflowAnchor: "none" }}
                             key={currentSessionId()}
                             className={
+                              (hasPerformedInitialScroll ? "" : " hidden ") +
                               "desktop:-ml-4 w-full mx-auto " +
                               "absolute mobile:top-0 desktop:top-0 left-0 " +
                               (settings?.enterpriseSettings
@@ -2519,18 +2485,7 @@ export function ChatPage({
                             // NOTE: temporarily removing this to fix the scroll bug
                             // (hasPerformedInitialScroll ? "" : "invisible")
                           >
-                            {(messageHistory.length < BUFFER_COUNT
-                              ? messageHistory
-                              : messageHistory.slice(
-                                  currentVisibleRange.start,
-                                  currentVisibleRange.end
-                                )
-                            ).map((message, fauxIndex) => {
-                              const i =
-                                messageHistory.length < BUFFER_COUNT
-                                  ? fauxIndex
-                                  : fauxIndex + currentVisibleRange.start;
-
+                            {messageHistory.map((message, i) => {
                               const messageMap = currentMessageMap(
                                 completeMessageDetail
                               );
@@ -2557,12 +2512,21 @@ export function ChatPage({
                                 ) {
                                   return <></>;
                                 }
+                                const nextMessage =
+                                  messageHistory.length > i + 1
+                                    ? messageHistory[i + 1]
+                                    : null;
                                 return (
                                   <div
                                     id={`message-${message.messageId}`}
                                     key={messageReactComponentKey}
                                   >
                                     <HumanMessage
+                                      disableSwitchingForStreaming={
+                                        (nextMessage &&
+                                          nextMessage.is_generating) ||
+                                        false
+                                      }
                                       stopGenerating={stopGenerating}
                                       content={message.message}
                                       files={message.files}
@@ -2650,6 +2614,11 @@ export function ChatPage({
                                     ? messageHistory[i + 1]?.documents
                                     : undefined;
 
+                                const nextMessage =
+                                  messageHistory[i + 1]?.type === "assistant"
+                                    ? messageHistory[i + 1]
+                                    : undefined;
+
                                 return (
                                   <div
                                     className="text-text"
@@ -2661,9 +2630,9 @@ export function ChatPage({
                                         : null
                                     }
                                   >
-                                    {message.sub_questions &&
-                                    message.sub_questions.length > 0 ? (
+                                    {message.is_agentic ? (
                                       <AgenticMessage
+                                        resubmit={handleResubmitLastMessage}
                                         error={uncaughtError}
                                         isStreamingQuestions={
                                           message.isStreamingQuestions ?? false
@@ -2678,7 +2647,10 @@ export function ChatPage({
                                             selectedMessageForDocDisplay ==
                                               secondLevelMessage?.messageId)
                                         }
-                                        isImprovement={message.isImprovement}
+                                        isImprovement={
+                                          message.isImprovement ||
+                                          nextMessage?.isImprovement
+                                        }
                                         secondLevelGenerating={
                                           (message.second_level_generating &&
                                             currentSessionChatState !==
@@ -2978,7 +2950,7 @@ export function ChatPage({
                                               messageId: message.messageId,
                                               parentMessage: parentMessage!,
                                               forceSearch: true,
-                                            })(llmOverrideManager.llmOverride);
+                                            })(llmManager.currentLlm);
                                           } else {
                                             setPopup({
                                               type: "error",
@@ -3008,21 +2980,18 @@ export function ChatPage({
                                       currentPersona={liveAssistant}
                                       messageId={message.messageId}
                                       content={
-                                        <p className="text-red-700 text-sm my-auto">
-                                          {message.message}
-                                          {message.stackTrace && (
-                                            <span
-                                              onClick={() =>
-                                                setStackTraceModalContent(
-                                                  message.stackTrace!
-                                                )
-                                              }
-                                              className="ml-2 cursor-pointer underline"
-                                            >
-                                              Show stack trace.
-                                            </span>
-                                          )}
-                                        </p>
+                                        <ErrorBanner
+                                          resubmit={handleResubmitLastMessage}
+                                          error={message.message}
+                                          showStackTrace={
+                                            message.stackTrace
+                                              ? () =>
+                                                  setStackTraceModalContent(
+                                                    message.stackTrace!
+                                                  )
+                                              : undefined
+                                          }
+                                        />
                                       }
                                     />
                                   </div>
@@ -3123,7 +3092,7 @@ export function ChatPage({
                               availableDocumentSets={documentSets}
                               availableTags={tags}
                               filterManager={filterManager}
-                              llmOverrideManager={llmOverrideManager}
+                              llmManager={llmManager}
                               removeDocs={() => {
                                 clearSelectedDocuments();
                               }}
