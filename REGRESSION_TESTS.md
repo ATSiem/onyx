@@ -62,13 +62,16 @@ To run the regression tests manually:
 - Properly handled None values for last_edit_timestamp
 
 **Tests:**
-- Schema Compatibility Tests: `backend/tests/unit/connectors/zulip/test_zulip_schema.py` - Verifies that our Zulip schemas include all required fields and that our connector contains proper URL normalization and string conversion code patterns
-- Full Integration Tests: `backend/tests/unit/connectors/zulip/test_zulip_metadata.py` (documented but not currently run due to dependency issues)
+- Schema Compatibility Tests: `backend/tests/unit/connectors/zulip/test_zulip_schema.py` - Verifies:
+  1. Our Zulip schemas include all required fields
+  2. Our connector contains proper URL normalization and string conversion code patterns
+  3. Client library version is compatible with our requirements (supports versions 0.8.0 to 1.0.0)
+- Full Integration Tests: `backend/tests/unit/connectors/zulip/test_zulip_metadata.py` - Verifies:
+  1. URL normalization is properly applied to different formats
+  2. Metadata values are correctly converted to strings
+  3. None values for last_edit_timestamp are handled correctly
 
-**Note:** The schema compatibility tests don't require the actual Zulip library, allowing them to run in CI environments without additional dependencies. They verify:
-1. Schema field definitions match requirements
-2. URL normalization code patterns exist
-3. String conversion patterns exist for metadata
+**Note:** The schema compatibility tests don't require the actual Zulip library, allowing them to run in CI environments without additional dependencies.
 
 ## How to Add New Regression Tests
 
