@@ -6,7 +6,7 @@ module.exports = {
   },
   testPathIgnorePatterns: ["/node_modules/", "/tests/e2e/"],
   transform: {
-    "^.+\\.(ts|tsx)$": "babel-jest"
+    "^.+\\.(ts|tsx)$": "ts-jest"
   },
   setupFilesAfterEnv: ["<rootDir>/src/setupTests.ts"],
 };
