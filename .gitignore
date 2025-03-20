@@ -14,3 +14,4 @@ deployment/data/certbot/
 deployment/data/sslcerts/
 local-config/
 /db-backups/
+.cursor/
