@@ -37,6 +37,10 @@ export const LLMSelector: React.FC<LLMSelectorProps> = ({
   const llmOptions = llmProviders.flatMap((provider) => {
     return (provider.display_model_names || provider.model_names)
       .filter((modelName) => {
+        if (modelName === "o1-2024-12-17") {
+          return false;
+        }
+        
         const displayName = getDisplayNameForModel(modelName);
         if (seenModelNames.has(displayName)) {
           return false;
