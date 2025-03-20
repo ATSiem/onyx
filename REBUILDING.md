@@ -24,7 +24,7 @@ Both environments use a local Unstructured API:
 docker pull --platform linux/amd64 downloads.unstructured.io/unstructured-io/unstructured-api:latest
 
 # Run locally
-docker run --platform linux/amd64 -p 8000:8000 -d --rm --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
+docker run --platform linux/amd64 -p 8000:8000 -d --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
 
 # Generate and set up API key
 docker exec -it unstructured-api bash
