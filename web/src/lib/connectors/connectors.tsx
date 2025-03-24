@@ -116,6 +116,15 @@ export interface ConnectionConfiguration {
     | FileOption
     | TabOption
   )[];
+  credentials?: (
+    | BooleanOption
+    | ListOption
+    | TextOption
+    | NumberOption
+    | SelectOption
+    | FileOption
+    | TabOption
+  )[];
   advanced_values: (
     | BooleanOption
     | ListOption
@@ -1308,39 +1317,47 @@ For example, specifying .*-support.* as a "channel" will cause the connector to 
     advanced_values: [],
   },
   azure_devops: {
-    connector_specific_config: [
+    description: "Configure Azure DevOps connector",
+    values: [
       {
-        name: "organization",
+        type: "text",
+        query: "Enter your Azure DevOps organization name:",
         label: "Organization",
-        type: "text",
+        name: "organization",
         description: "Your Azure DevOps organization name.",
+        optional: false,
       },
       {
-        name: "project",
-        label: "Project",
         type: "text",
+        query: "Enter your Azure DevOps project name:",
+        label: "Project",
+        name: "project",
         description: "Your Azure DevOps project name.",
+        optional: false,
       },
       {
-        name: "work_item_types",
-        label: "Work Item Types",
         type: "list",
-        description: "Types of work items to index (leave empty for all types).",
-        default: ["Bug", "Epic", "Feature", "Issue", "Task", "UserStory"],
+        query: "Select work item types to include:",
+        label: "Work Item Types",
+        name: "work_item_types",
+        description: "Types of work items to include (leave empty for all types).",
+        default: ["Bug", "Epic", "Feature", "Issue", "Task", "TestCase", "UserStory"],
         optional: true,
       },
       {
-        name: "include_comments",
-        label: "Include Comments",
         type: "checkbox",
+        query: "Include work item comments?",
+        label: "Include Comments",
+        name: "include_comments",
         description: "Whether to include work item comments.",
         default: true,
         optional: true,
       },
       {
-        name: "include_attachments",
-        label: "Include Attachments",
         type: "checkbox",
+        query: "Include work item attachments?",
+        label: "Include Attachments",
+        name: "include_attachments",
         description: "Whether to include work item attachments (as links).",
         default: false,
         optional: true,

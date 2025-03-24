@@ -118,21 +118,128 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         if not self.client_config:
             raise ConnectorValidationError("Azure DevOps client not configured")
         
-        # Try to fetch a single work item to validate settings
+        # Try to fetch project info as a simpler validation step
         try:
-            # Make a simple API call to verify credentials
-            response = self._make_api_request(
-                f"_apis/wit/wiql",
-                method="POST",
-                data=json.dumps({
-                    "query": "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.WorkItemType] IN ('Bug') ORDER BY [System.ChangedDate] DESC",
-                    "top": 1
-                })
+            # First, get the list of projects at organization level
+            logger.info(f"Validating connection to Azure DevOps organization: {self.organization}")
+            
+            # Check if PAT is present but masked for privacy in logs
+            if self.personal_access_token:
+                pat_length = len(self.personal_access_token)
+                logger.info(f"Using PAT (length: {pat_length}, first chars: {self.personal_access_token[:4]}...)")
+            else:
+                logger.warning("No Personal Access Token provided")
+            
+            # Start with organization-level API call which we know works with the PAT
+            org_response = self._make_api_request(
+                endpoint="_apis/projects",
+                method="GET",
+                organization_level=True  # Mark this as an organization-level call
             )
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
+            
+            logger.info(f"Organization API response status code: {org_response.status_code}")
+            org_response.raise_for_status()
+            
+            # Extract all projects to find our project by name
+            org_data = org_response.json()
+            projects = org_data.get("value", [])
+            logger.info(f"Found {len(projects)} projects in organization")
+            
+            # Find our project
+            project_found = False
+            project_id = None
+            
+            for project in projects:
+                if project.get("name") == self.project:
+                    project_found = True
+                    project_id = project.get("id")
+                    logger.info(f"Found project '{self.project}' with ID: {project_id}")
+                    break
+            
+            if not project_found:
+                logger.error(f"Project '{self.project}' not found in organization '{self.organization}'")
+                raise ConnectorValidationError(f"Project '{self.project}' not found in organization '{self.organization}'. Please verify the project name.")
+            
+            # Now that we know the project exists, try to get work item types using project ID
+            # This ensures we have proper permissions for work items
+            logger.info(f"Validating work item access for project: {self.project}")
+            
+            # Use organization-level API with project in query rather than path
+            types_response = self._make_api_request(
+                "_apis/wit/workitemtypes",
+                method="GET",
+                params={"project": self.project},
+                organization_level=True  # Use organization-level URL
+            )
+            
+            if types_response.status_code == 200:
+                types_data = types_response.json()
+                available_types = [t.get('name') for t in types_data.get('value', [])]
+                logger.info(f"Available work item types in this project: {', '.join(available_types)}")
+                
+                # Update work item types to only include actually available types
+                if self.work_item_types:
+                    original_types = set(self.work_item_types)
+                    available_type_set = set(available_types)
+                    
+                    # Check which types are actually available
+                    found_types = original_types.intersection(available_type_set)
+                    
+                    # Try with variant spellings (UserStory vs User Story)
+                    for original_type in original_types:
+                        if original_type not in found_types:
+                            # Check common variants
+                            if original_type == "User Story" and "UserStory" in available_type_set:
+                                found_types.add("UserStory")
+                            elif original_type == "UserStory" and "User Story" in available_type_set:
+                                found_types.add("User Story")
+                    
+                    if found_types != original_types:
+                        logger.info(f"Some specified work item types are not available. Using available types: {found_types}")
+                        self.work_item_types = list(found_types) or ["Bug", "Task"]  # Default to Bug and Task if none found
+            
+        except requests.exceptions.HTTPError as e:
+            error_message = str(e)
+            status_code = e.response.status_code if hasattr(e, 'response') and hasattr(e.response, 'status_code') else 'unknown'
+            logger.error(f"HTTP Error during validation: {error_message} (status code: {status_code})")
+            
+            # Try to get more details from the response
+            error_details = None
+            if hasattr(e, 'response') and hasattr(e.response, 'content'):
+                try:
+                    error_details = e.response.json() if e.response.content else None
+                except:
+                    error_details = e.response.content.decode('utf-8', errors='ignore')[:200] if e.response.content else None
+            
+            if error_details:
+                logger.error(f"Error details: {error_details}")
+            
+            # Provide more user-friendly error messages
+            if status_code == 401:
+                error_message = "Authentication failed. Please check your Personal Access Token. Make sure it has not expired and has sufficient scopes (read access to the project)."
+            elif status_code == 403:
+                error_message = "Authorization failed. Your PAT doesn't have sufficient permissions for this project."
+            elif status_code == 404:
+                error_message = f"Project '{self.project}' not found in organization '{self.organization}'. Please verify the project and organization names."
+            
             raise ConnectorValidationError(
-                f"Failed to connect to Azure DevOps API: {str(e)}"
+                f"Failed to connect to Azure DevOps API: {error_message}"
+            )
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request exception during validation: {str(e)}")
+            error_message = str(e)
+            
+            # Provide more specific error messages for common issues
+            if "SSLError" in error_message:
+                error_message = "SSL Error occurred. This might be due to network or proxy issues."
+            elif "ConnectionError" in error_message:
+                error_message = "Connection Error. Could not connect to Azure DevOps. Please check your network connection."
+            elif "Timeout" in error_message:
+                error_message = "Connection timed out. Azure DevOps API did not respond in time."
+                
+            raise ConnectorValidationError(
+                f"Failed to connect to Azure DevOps API: {error_message}"
             )
 
     @retry_builder(tries=5, backoff=1.5)
@@ -142,7 +249,8 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         endpoint: str, 
         method: str = "GET", 
         params: Dict[str, Any] = None,
-        data: str = None
+        data: str = None,
+        organization_level: bool = False
     ) -> requests.Response:
         """Make an API request to Azure DevOps with rate limiting and retry logic.
         
@@ -151,6 +259,8 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             method: HTTP method
             params: URL parameters
             data: Request body for POST requests
+            organization_level: Whether this is an organization-level API call
+                               (no project in path)
             
         Returns:
             Response object
@@ -161,10 +271,26 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         if not self.client_config:
             raise ConnectorValidationError("Azure DevOps client not configured")
         
-        base_url = self.client_config["base_url"].rstrip("/")
-        url = f"{base_url}/{endpoint}"
+        # For organization-level APIs, use just the organization part of the URL
+        if organization_level:
+            # Extract just the organization part from the base URL
+            org_url_parts = self.client_config["base_url"].split('/')
+            # Typical URL format: https://dev.azure.com/org/project/
+            if 'dev.azure.com' in self.client_config["base_url"].lower():
+                # For dev.azure.com URLs
+                org_base_url = f"https://dev.azure.com/{self.organization}"
+            else:
+                # For visualstudio.com URLs
+                org_base_url = f"https://{self.organization}.visualstudio.com"
+            
+            url = f"{org_base_url}/{endpoint}"
+            logger.info(f"Using organization-level API URL: {url}")
+        else:
+            # Use the full project URL for project-level APIs
+            base_url = self.client_config["base_url"].rstrip("/")
+            url = f"{base_url}/{endpoint}"
         
-        # Ensure API version is included
+        # Ensure API version is included, but don't override if explicitly provided
         api_params = params or {}
         if "api-version" not in api_params:
             api_params["api-version"] = self.client_config["api_version"]
@@ -174,7 +300,13 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             "Accept": "application/json"
         }
         
+        # Keep track of errors to provide better debugging info
+        errors = []
+        urls_tried = []
+        
+        # First try with the primary URL
         try:
+            logger.debug(f"Making {method} request to {url} with params {api_params}")
             response = requests.request(
                 method=method,
                 url=url,
@@ -183,6 +315,7 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                 headers=headers,
                 data=data
             )
+            urls_tried.append(url)
             
             # Handle rate limiting explicitly
             if response.status_code == 429:
@@ -190,17 +323,82 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                 logger.warning(f"Rate limited by Azure DevOps API. Waiting for {retry_after} seconds.")
                 time.sleep(retry_after)
                 # Recursive call after waiting
-                return self._make_api_request(endpoint, method, params, data)
+                return self._make_api_request(endpoint, method, params, data, organization_level)
             
             # Check for X-RateLimit headers to adjust our rate limiting if needed
             remaining = response.headers.get('X-RateLimit-Remaining')
             if remaining and int(remaining) < 10:
                 logger.warning(f"Approaching Azure DevOps API rate limit. Only {remaining} requests remaining.")
             
+            # Log bad request errors with more detail
+            if response.status_code == 400:
+                try:
+                    error_content = response.json()
+                    logger.error(f"Bad request (400) error: {error_content}")
+                except:
+                    logger.error(f"Bad request (400) error: {response.text[:500]}")
+            
+            # If we got a 404 or 401, we might want to try alternate URL formats
+            if response.status_code in (404, 401) and "alt_base_url" in self.client_config and not organization_level:
+                errors.append(f"Primary URL {url} failed with status code {response.status_code}")
+                
+                # Try with the alternate URL format (only for project-level APIs)
+                alt_base_url = self.client_config["alt_base_url"].rstrip("/")
+                alt_url = f"{alt_base_url}/{endpoint}"
+                
+                if alt_url not in urls_tried:  # Avoid infinite recursion
+                    logger.info(f"Primary URL failed, trying alternate URL: {alt_url}")
+                    
+                    alt_response = requests.request(
+                        method=method,
+                        url=alt_url,
+                        auth=self.client_config["auth"],
+                        params=api_params,
+                        headers=headers,
+                        data=data
+                    )
+                    urls_tried.append(alt_url)
+                    
+                    # If alternate URL works better, update the client config
+                    if alt_response.status_code < response.status_code:
+                        logger.info(f"Alternate URL format worked better, updating client config")
+                        self.client_config["base_url"] = alt_base_url
+                        return alt_response
+            
             return response
         except requests.exceptions.RequestException as e:
-            logger.error(f"Azure DevOps API request failed: {str(e)}")
-            raise ConnectorValidationError(f"API request failed: {str(e)}")
+            error_str = str(e)
+            errors.append(f"Request to {url} failed: {error_str}")
+            
+            # Try alternate URL if primary fails due to connection issue (only for project-level APIs)
+            if "alt_base_url" in self.client_config and not organization_level:
+                alt_base_url = self.client_config["alt_base_url"].rstrip("/")
+                alt_url = f"{alt_base_url}/{endpoint}"
+                
+                if alt_url not in urls_tried:  # Avoid infinite recursion
+                    logger.info(f"Primary URL failed with exception, trying alternate URL: {alt_url}")
+                    try:
+                        alt_response = requests.request(
+                            method=method,
+                            url=alt_url,
+                            auth=self.client_config["auth"],
+                            params=api_params,
+                            headers=headers,
+                            data=data
+                        )
+                        urls_tried.append(alt_url)
+                        
+                        # If we get here, the alternate URL worked; update the client config
+                        logger.info(f"Alternate URL format worked, updating client config")
+                        self.client_config["base_url"] = alt_base_url
+                        return alt_response
+                    except requests.exceptions.RequestException as alt_e:
+                        errors.append(f"Request to alternate URL {alt_url} also failed: {str(alt_e)}")
+            
+            # Both attempts failed or we only had one URL to try
+            error_detail = "; ".join(errors)
+            logger.error(f"All Azure DevOps API requests failed: {error_detail}")
+            raise ConnectorValidationError(f"API request failed: {error_str}. URLs tried: {', '.join(urls_tried)}")
 
     def _get_work_items(
         self, 
@@ -218,18 +416,31 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         Returns:
             API response containing work items
         """
-        # Build WIQL query
-        query = "SELECT [System.Id], [System.Title], [System.WorkItemType] FROM WorkItems WHERE [System.TeamProject] = @project"
+        # Build a WIQL query that explicitly uses the project name instead of @project parameter
+        # This makes the filtering more explicit and reliable
+        query = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{self.project}'"
         
-        # Add work item type filter
+        # Add work item type filter if specified
         if self.work_item_types and len(self.work_item_types) > 0:
-            types_str = ", ".join([f"'{item_type}'" for item_type in self.work_item_types])
+            # Convert user-friendly names to exact Azure DevOps system names if needed
+            # e.g., "User Story" might be stored as "UserStory" in some projects
+            sanitized_types = []
+            for item_type in self.work_item_types:
+                sanitized_types.append(item_type)
+                # Add common variations
+                if item_type == "User Story":
+                    sanitized_types.append("UserStory")
+                elif item_type == "UserStory":
+                    sanitized_types.append("User Story")
+            
+            types_str = ", ".join([f"'{item_type}'" for item_type in sanitized_types])
             query += f" AND [System.WorkItemType] IN ({types_str})"
         
         # Add time filter if specified
         if start_time:
-            formatted_time = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
-            query += f" AND [System.ChangedDate] >= '{formatted_time}'"
+            # Format with only date part, without time component to avoid WIQL precision error
+            formatted_date = start_time.strftime("%Y-%m-%d")
+            query += f" AND [System.ChangedDate] >= '{formatted_date}'"
         
         # Order by changed date
         query += " ORDER BY [System.ChangedDate] DESC"
@@ -243,14 +454,38 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         if continuation_token:
             data["continuationToken"] = continuation_token
             
-        response = self._make_api_request(
-            "_apis/wit/wiql",
-            method="POST",
-            data=json.dumps(data)
-        )
-        
-        response.raise_for_status()
-        return response.json()
+        # Log the WIQL query to help debug issues
+        logger.info(f"Executing WIQL query: {query}")
+        logger.info(f"Organization: {self.organization}, Project: {self.project}")
+            
+        try:
+            response = self._make_api_request(
+                "_apis/wit/wiql",
+                method="POST",
+                data=json.dumps(data),
+                organization_level=True  # Use organization-level URL
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            # Log the number of work items found
+            work_item_count = len(result.get("workItems", []))
+            logger.info(f"WIQL query returned {work_item_count} work items")
+            
+            return result
+        except requests.exceptions.RequestException as e:
+            # Get more details about the error
+            error_detail = ""
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                except:
+                    error_detail = e.response.text
+                
+            logger.error(f"Error executing WIQL query: {str(e)}")
+            logger.error(f"Error details: {error_detail}")
+            raise ConnectorValidationError(f"Failed to execute WIQL query: {str(e)}")
 
     def _get_work_item_details(self, work_item_ids: List[int]) -> List[Dict[str, Any]]:
         """Get detailed information for work items.
@@ -289,18 +524,52 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         
         fields_str = ",".join(fields)
         
-        # Make the request
-        response = self._make_api_request(
-            f"_apis/wit/workitems",
-            params={
-                "ids": ids_str,
-                "fields": fields_str,
-                "$expand": "all"  # Include comments and other relations
-            }
-        )
+        # Detailed logging to debug API issues
+        logger.info(f"Fetching details for work items: {ids_str}")
         
-        response.raise_for_status()
-        return response.json().get("value", [])
+        try:
+            # Make the request
+            # NOTE: Using the project in the URL path (not as a query parameter)
+            # Also removing $expand parameter as it conflicts with fields parameter
+            response = self._make_api_request(
+                f"{self.project}/_apis/wit/workitems",
+                params={
+                    "ids": ids_str,
+                    "fields": fields_str
+                },
+                organization_level=True  # Use organization-level URL
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            logger.info(f"Successfully fetched {len(result.get('value', []))} work items")
+            return result.get("value", [])
+            
+        except requests.exceptions.RequestException as e:
+            # Get more details about the error
+            error_detail = ""
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                except:
+                    error_detail = e.response.text
+                
+            logger.error(f"HTTP error fetching work items: {str(e)}")
+            logger.error(f"Error details: {error_detail}")
+            
+            # For Azure DevOps, let's be explicit about certain error types
+            if hasattr(e, 'response'):
+                if e.response.status_code == 401:
+                    logger.error("Authentication failed. Check your Personal Access Token.")
+                elif e.response.status_code == 403:
+                    logger.error("Authorization failed. Verify your PAT has 'Read' permissions for Work Items.")
+                elif e.response.status_code == 404:
+                    logger.error(f"Work items not found. Verify the work item IDs exist: {ids_str}")
+                elif e.response.status_code == 400:
+                    logger.error("Bad request. The request may be malformed or invalid work items were specified.")
+            
+            # Re-raise as ConnectorValidationError for the indexing process to handle
+            raise ConnectorValidationError(f"Failed to fetch work items: {str(e)}")
 
     def _get_work_item_comments(self, work_item_id: int) -> List[Dict[str, Any]]:
         """Get comments for a work item.
@@ -315,8 +584,11 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             return []
         
         try:
+            # Note: Comments API requires api-version with -preview flag
             response = self._make_api_request(
-                f"_apis/wit/workItems/{work_item_id}/comments"
+                f"{self.project}/_apis/wit/workItems/{work_item_id}/comments",
+                params={"api-version": "7.0-preview"},  # Override the default API version to use preview
+                organization_level=True  # Use organization-level URL
             )
             response.raise_for_status()
             return response.json().get("comments", [])

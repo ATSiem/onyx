@@ -34,16 +34,28 @@ To use this connector, you'll need:
 
 ### Configuring the Connector in Onyx
 
-1. In the Onyx admin interface, go to "Connectors" and click "Add Connector"
+The setup is a two-step process:
+
+#### Step 1: Create a Credential
+
+1. In the Onyx admin interface, go to "Connectors" and click "Create Credential"
 2. Select "Azure DevOps" from the list
-3. Fill in the required information:
+3. Enter a name for your credential (optional)
+4. Paste your Personal Access Token in the field
+5. Click "Create"
+
+#### Step 2: Add the Connector
+
+1. After creating the credential, go to "Add Connector"
+2. Select "Azure DevOps" from the list
+3. Select the credential you just created
+4. Fill in the required information:
    - **Organization**: Your Azure DevOps organization name
    - **Project**: Your Azure DevOps project name
    - **Work Item Types**: (Optional) Types of work items to index (e.g., Bug, UserStory, Task)
    - **Include Comments**: Toggle to include work item comments
    - **Include Attachments**: Toggle to include links to work item attachments
-   - **Personal Access Token**: The PAT you created earlier
-4. Click "Save" to add the connector
+5. Click "Save" to add the connector
 
 ## How It Works
 
@@ -58,4 +70,37 @@ The connector uses the Azure DevOps REST API to:
 
 - The connector does not index the content of attachments, only their links
 - Due to API limitations, some work item history details might not be included
-- The connector currently only supports a single project per connector instance 
+- The connector currently only supports a single project per connector instance
+
+## Troubleshooting
+
+### Common Setup Issues
+
+1. **"Unable to authenticate" error**: 
+   - Verify your Personal Access Token is correct and not expired
+   - Ensure the PAT has "Read" permissions for work items
+   - Check that you've entered the organization and project names correctly
+
+2. **No work items appearing after indexing**:
+   - Confirm your project has work items of the selected types
+   - Check that the work items have been updated recently (if using changed date filtering)
+   - Verify the connector configuration is correct (organization, project names)
+
+3. **Credential Creation vs Connector Configuration**:
+   - Remember that creating a credential is separate from configuring the connector
+   - First create the credential with your PAT, then configure the connector with organization and project details
+   - If you see only a PAT field during setup, you're likely in the credential creation step - after creating the credential, you'll need to complete the connector configuration
+
+4. **URL Configuration**:
+   - You don't need to manually enter the Azure DevOps URL
+   - The connector automatically builds the URL using your organization and project names
+   - Just enter the organization name (the part after `https://dev.azure.com/`) and project name
+
+### Testing the Connection
+
+After setup, you can verify the connection is working by:
+
+1. Saving the connector configuration
+2. Starting an indexing job
+3. Checking the logs for any errors
+4. Verifying that work items appear in search results 
