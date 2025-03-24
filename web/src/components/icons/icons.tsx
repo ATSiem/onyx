@@ -90,6 +90,7 @@ import voyageIcon from "../../../public/Voyage.png";
 import googleIcon from "../../../public/Google.webp";
 import xenforoIcon from "../../../public/Xenforo.svg";
 import highspotIcon from "../../../public/Highspot.png";
+import azureDevopsIcon from "../../../public/AzureDevops.svg";
 import { FaGithub, FaRobot } from "react-icons/fa";
 
 import { cn } from "@/lib/utils";
@@ -2918,6 +2919,13 @@ export const HighspotIcon = ({
   className = defaultTailwindCSS,
 }: IconProps) => {
   return <LogoIcon size={size} className={className} src={highspotIcon} />;
+};
+
+export const AzureDevOpsIcon = ({
+  size = 16,
+  className = defaultTailwindCSS,
+}: IconProps) => {
+  return <LogoIcon size={size} className={className} src={azureDevopsIcon} />;
 };
 
 export const PinnedIcon = ({
