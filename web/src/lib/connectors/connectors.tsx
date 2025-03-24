@@ -1336,15 +1336,6 @@ For example, specifying .*-support.* as a "channel" will cause the connector to 
         default: false,
         optional: true,
       },
-      {
-        type: "text",
-        query: "Enter your Azure DevOps Personal Access Token:",
-        label: "Personal Access Token",
-        name: "personal_access_token",
-        description:
-          "Your Azure DevOps Personal Access Token with read access to work items. Create one at https://dev.azure.com/[organization]/_usersSettings/tokens.",
-        optional: false,
-      },
     ],
     advanced_values: [],
   },

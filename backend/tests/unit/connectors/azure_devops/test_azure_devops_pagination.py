@@ -149,9 +149,6 @@ class TestAzureDevOpsConnectorPagination:
         rate_limit_response = MagicMock()
         rate_limit_response.status_code = 429
         rate_limit_response.headers = {'Retry-After': '2'}
-        rate_limit_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
-            "429 Client Error: Too Many Requests", response=rate_limit_response
-        )
         
         # Create a success response for the retry
         success_response = MagicMock()
@@ -178,29 +175,23 @@ class TestAzureDevOpsConnectorPagination:
             ]
         }
         
-        # Mock time.sleep to avoid delays in tests
+        # Testing the _make_api_request method directly since that's where rate limiting is handled
         with patch('time.sleep') as mock_sleep:
-            with patch.object(connector, '_make_api_request') as mock_request:
-                # Set up mock to return rate limit response first, then success
-                mock_request.side_effect = [
-                    rate_limit_response,  # First call gets rate limited
-                    success_response,     # Retry succeeds
-                    details_response      # Details call succeeds
-                ]
+            with patch('requests.request') as mock_request:
+                # First return rate limited response, then success
+                mock_request.side_effect = [rate_limit_response, success_response]
                 
-                # Create a checkpoint and call load_from_checkpoint
-                checkpoint = AzureDevOpsConnectorCheckpoint(has_more=True, continuation_token=None)
-                start_time = int(datetime(2023, 1, 1).timestamp())
-                end_time = int(datetime(2023, 1, 31).timestamp())
+                # Call the method directly - should handle rate limiting internally
+                response = connector._make_api_request('_apis/wit/wiql')
                 
-                # Collect documents from the connector
-                documents = list(connector.load_from_checkpoint(start_time, end_time, checkpoint))
-                
-                # Should have 1 document
-                assert len(documents) == 1
-                
-                # Check that sleep was called with the retry-after value
+                # Verify sleep was called with correct duration
                 mock_sleep.assert_called_with(2)
+                
+                # Verify request was called twice (initial + retry)
+                assert mock_request.call_count == 2
+                
+                # Verify the method returned the success response
+                assert response == success_response
 
     def test_empty_response_handling(self):
         """Test that the connector correctly handles empty responses."""

@@ -18,14 +18,53 @@ def build_azure_devops_client(
 ) -> dict[str, Any]:
     """
     Build and return Azure DevOps client configuration.
+    
+    Args:
+        credentials: Dictionary containing the personal access token
+        organization: Azure DevOps organization name
+        project: Azure DevOps project name
+        
+    Returns:
+        Dictionary with client configuration
     """
     personal_access_token = credentials["personal_access_token"]
+    
+    # Validate and sanitize organization and project names
+    # Azure DevOps URLs are case-sensitive
+    organization = organization.strip()
+    project = project.strip()
+    
+    # Log the configuration (without exposing the full PAT)
+    pat_masked = personal_access_token[:4] + "..." if personal_access_token else "None"
+    logger.info(f"Building Azure DevOps client for org: {organization}, project: {project}, PAT: {pat_masked}")
+    
+    # Check if PAT appears to be valid (basic validation)
+    if not personal_access_token or len(personal_access_token) < 30:
+        logger.warning(f"PAT length ({len(personal_access_token) if personal_access_token else 0}) appears shorter than expected for Azure DevOps. It may not be valid.")
+    
+    # Check if the organization and project names look valid
+    if not organization or " " in organization:
+        logger.warning(f"Organization name '{organization}' may not be valid (empty or contains spaces)")
+    
+    if not project:
+        logger.warning("Project name is empty")
+    
+    # Build the base URL
+    base_url = f"https://dev.azure.com/{organization}/{project}/"
+    
+    # Some Azure DevOps instances use a different URL format, especially for older
+    # or on-premises installations, so we provide a fallback option
+    alt_base_url = f"https://{organization}.visualstudio.com/{project}/"
+    
+    logger.info(f"Using primary base URL: {base_url}")
+    logger.info(f"Alternative base URL (if needed): {alt_base_url}")
 
     return {
         "auth": HTTPBasicAuth("", personal_access_token),
         "organization": organization,
         "project": project,
-        "base_url": f"https://dev.azure.com/{organization}/{project}/",
+        "base_url": base_url,
+        "alt_base_url": alt_base_url,
         "api_version": "7.0",  # Using the latest stable version as of 2023
     }
 
