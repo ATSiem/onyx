@@ -15,6 +15,7 @@ from google.oauth2.service_account import Credentials as ServiceAccountCredentia
 from googleapiclient.errors import HttpError  # type: ignore
 from typing_extensions import override
 
+from onyx.configs.app_configs import GOOGLE_DRIVE_CONNECTOR_SIZE_THRESHOLD
 from onyx.configs.app_configs import INDEX_BATCH_SIZE
 from onyx.configs.app_configs import MAX_DRIVE_WORKERS
 from onyx.configs.constants import DocumentSource
@@ -86,6 +87,8 @@ def _extract_ids_from_urls(urls: list[str]) -> list[str]:
 def _convert_single_file(
     creds: Any,
     primary_admin_email: str,
+    allow_images: bool,
+    size_threshold: int,
     file: dict[str, Any],
 ) -> Document | ConnectorFailure | None:
     user_email = file.get("owners", [{}])[0].get("emailAddress") or primary_admin_email
@@ -101,6 +104,8 @@ def _convert_single_file(
         file=file,
         drive_service=user_drive_service,
         docs_service=docs_service,
+        allow_images=allow_images,
+        size_threshold=size_threshold,
     )
 
 
@@ -234,6 +239,12 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
         self._creds: OAuthCredentials | ServiceAccountCredentials | None = None
 
         self._retrieved_ids: set[str] = set()
+        self.allow_images = False
+
+        self.size_threshold = GOOGLE_DRIVE_CONNECTOR_SIZE_THRESHOLD
+
+    def set_allow_images(self, value: bool) -> None:
+        self.allow_images = value
 
     @property
     def primary_admin_email(self) -> str:
@@ -900,6 +911,8 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
                     _convert_single_file,
                     self.creds,
                     self.primary_admin_email,
+                    self.allow_images,
+                    self.size_threshold,
                 )
 
                 # Fetch files in batches
@@ -1097,7 +1110,9 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
             drive_service.files().list(pageSize=1, fields="files(id)").execute()
 
             if isinstance(self._creds, ServiceAccountCredentials):
-                retry_builder()(get_root_folder_id)(drive_service)
+                # default is ~17mins of retries, don't do that here since this is called from
+                # the UI
+                retry_builder(tries=3, delay=0.1)(get_root_folder_id)(drive_service)
 
         except HttpError as e:
             status_code = e.resp.status if e.resp else None
