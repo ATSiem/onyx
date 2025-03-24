@@ -50,3 +50,10 @@ class InsufficientPermissionsError(ConnectorValidationError):
         self, message: str = "Insufficient permissions for the requested operation"
     ):
         super().__init__(message)
+
+
+class ConnectorMissingCredentialError(ConnectorValidationError):
+    """Raised when a connector's required credentials are missing."""
+
+    def __init__(self, message: str = "Required credentials are missing"):
+        super().__init__(message)
