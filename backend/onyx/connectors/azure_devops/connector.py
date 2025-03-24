@@ -1,7 +1,8 @@
 """Azure DevOps connector for Onyx"""
 import json
+import time
 from collections.abc import Generator, Iterator
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
 import requests
@@ -16,6 +17,7 @@ from onyx.connectors.azure_devops.utils import format_date
 from onyx.connectors.azure_devops.utils import get_item_field_value
 from onyx.connectors.azure_devops.utils import get_user_info_from_item
 from onyx.connectors.cross_connector_utils.miscellaneous_utils import time_str_to_utc
+from onyx.connectors.cross_connector_utils.rate_limit_wrapper import rate_limit_builder
 from onyx.connectors.exceptions import ConnectorMissingCredentialError
 from onyx.connectors.exceptions import ConnectorValidationError
 from onyx.connectors.interfaces import CheckpointConnector
@@ -33,6 +35,7 @@ from onyx.connectors.models import SlimDocument
 from onyx.connectors.models import TextSection
 from onyx.indexing.indexing_heartbeat import IndexingHeartbeatInterface
 from onyx.utils.logger import setup_logger
+from onyx.utils.retry_wrapper import retry_builder
 
 logger = setup_logger()
 
@@ -40,6 +43,11 @@ logger = setup_logger()
 MAX_RESULTS_PER_PAGE = 100
 MAX_WORK_ITEM_SIZE = 500000  # 500 KB in bytes
 WORK_ITEM_TYPES = ["Bug", "Epic", "Feature", "Issue", "Task", "TestCase", "UserStory"]
+
+# Rate limit settings based on Azure DevOps documentation
+# Azure DevOps recommends responding to Retry-After headers and has a global consumption limit
+# of 200 Azure DevOps throughput units (TSTUs) within a sliding 5-minute window
+MAX_API_CALLS_PER_MINUTE = 60  # Conservative limit to avoid hitting rate limits
 
 
 class AzureDevOpsConnectorCheckpoint(ConnectorCheckpoint):
@@ -127,6 +135,8 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                 f"Failed to connect to Azure DevOps API: {str(e)}"
             )
 
+    @retry_builder(tries=5, backoff=1.5)
+    @rate_limit_builder(max_calls=MAX_API_CALLS_PER_MINUTE, period=60)
     def _make_api_request(
         self, 
         endpoint: str, 
@@ -134,7 +144,7 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         params: Dict[str, Any] = None,
         data: str = None
     ) -> requests.Response:
-        """Make an API request to Azure DevOps.
+        """Make an API request to Azure DevOps with rate limiting and retry logic.
         
         Args:
             endpoint: API endpoint relative to the organization/project
@@ -173,6 +183,20 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                 headers=headers,
                 data=data
             )
+            
+            # Handle rate limiting explicitly
+            if response.status_code == 429:
+                retry_after = int(response.headers.get('Retry-After', 30))
+                logger.warning(f"Rate limited by Azure DevOps API. Waiting for {retry_after} seconds.")
+                time.sleep(retry_after)
+                # Recursive call after waiting
+                return self._make_api_request(endpoint, method, params, data)
+            
+            # Check for X-RateLimit headers to adjust our rate limiting if needed
+            remaining = response.headers.get('X-RateLimit-Remaining')
+            if remaining and int(remaining) < 10:
+                logger.warning(f"Approaching Azure DevOps API rate limit. Only {remaining} requests remaining.")
+            
             return response
         except requests.exceptions.RequestException as e:
             logger.error(f"Azure DevOps API request failed: {str(e)}")
@@ -421,20 +445,18 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             raise ConnectorMissingCredentialError("Azure DevOps")
         
         # Convert epoch seconds to datetime
-        start_time = datetime.fromtimestamp(start)
-        end_time = datetime.fromtimestamp(end)
+        # Using timezone.utc to create timezone-aware datetimes for proper comparison
+        start_time = datetime.fromtimestamp(start, tz=timezone.utc)
+        end_time = datetime.fromtimestamp(end, tz=timezone.utc)
         
         # Get continuation token from checkpoint
         continuation_token = checkpoint.continuation_token
         has_more = True
         
-        # Safety mechanism for testing to prevent infinite loops
-        iteration_count = 0
-        max_iterations = 10  # Reasonable limit for testing
+        # Initialize document batch
+        doc_batch: List[Document] = []
         
-        while has_more and iteration_count < max_iterations:
-            iteration_count += 1
-            
+        while has_more:
             try:
                 # Get work items
                 result = self._get_work_items(
@@ -449,43 +471,66 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                 
                 # Update continuation token
                 continuation_token = result.get("continuationToken")
-                has_more = continuation_token is not None
+                has_more = continuation_token is not None and len(work_item_ids) > 0
                 
                 # Get details for each work item
                 if work_item_ids:
-                    work_item_details = self._get_work_item_details(work_item_ids)
-                    
-                    # Process each work item
-                    for work_item in work_item_details:
-                        try:
-                            # Check if work item was updated within our time range
-                            changed_date = get_item_field_value(work_item, "System.ChangedDate")
-                            if changed_date:
-                                changed_datetime = format_date(changed_date)
-                                if changed_datetime and (changed_datetime < start_time or changed_datetime > end_time):
-                                    continue
-                            
-                            document = self._process_work_item(work_item)
-                            yield document
-                        except Exception as e:
-                            logger.error(f"Failed to process work item: {str(e)}")
-                            work_item_id = get_item_field_value(work_item, "System.Id", "unknown")
-                            item_url = build_azure_devops_url(
-                                self.client_config["base_url"], 
-                                str(work_item_id), 
-                                "workitems"
-                            )
-                            yield ConnectorFailure(
-                                failed_document=DocumentFailure(
-                                    document_id=item_url,
-                                    document_link=item_url
-                                ),
-                                failure_message=f"Failed to process work item: {str(e)}"
-                            )
+                    # Process work items in batches of 200 (API limit)
+                    for i in range(0, len(work_item_ids), 200):
+                        batch = work_item_ids[i:i+200]
+                        work_item_details = self._get_work_item_details(batch)
+                        
+                        # Process each work item
+                        for work_item in work_item_details:
+                            try:
+                                # Check if work item was updated within our time range
+                                changed_date = get_item_field_value(work_item, "System.ChangedDate")
+                                if changed_date:
+                                    changed_datetime = format_date(changed_date)
+                                    if changed_datetime and (changed_datetime < start_time or changed_datetime > end_time):
+                                        continue
+                                
+                                document = self._process_work_item(work_item)
+                                doc_batch.append(document)
+                                
+                                # Yield in batches
+                                if len(doc_batch) >= INDEX_BATCH_SIZE:
+                                    for doc in doc_batch:
+                                        yield doc
+                                    doc_batch = []
+                            except Exception as e:
+                                logger.error(f"Failed to process work item: {str(e)}")
+                                work_item_id = get_item_field_value(work_item, "System.Id", "unknown")
+                                item_url = build_azure_devops_url(
+                                    self.client_config["base_url"], 
+                                    str(work_item_id), 
+                                    "workitems"
+                                )
+                                yield ConnectorFailure(
+                                    failed_document=DocumentFailure(
+                                        document_id=item_url,
+                                        document_link=item_url
+                                    ),
+                                    failure_message=f"Failed to process work item: {str(e)}"
+                                )
                 else:
                     # No more work items, break out of the loop
                     has_more = False
             
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:  # Too Many Requests
+                    retry_after = int(e.response.headers.get('Retry-After', 30))
+                    logger.warning(f"Rate limited by Azure DevOps API. Waiting for {retry_after} seconds.")
+                    time.sleep(retry_after)
+                    # Continue with the next iteration
+                    continue
+                else:
+                    logger.error(f"HTTP error fetching work items: {str(e)}")
+                    yield ConnectorFailure(
+                        failed_entity=EntityFailure(entity_id="azure_devops_work_items"),
+                        failure_message=f"Failed to fetch work items: {str(e)}"
+                    )
+                    has_more = False
             except Exception as e:
                 logger.error(f"Failed to fetch work items: {str(e)}")
                 yield ConnectorFailure(
@@ -493,6 +538,10 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                     failure_message=f"Failed to fetch work items: {str(e)}"
                 )
                 has_more = False
+        
+        # Yield any remaining documents
+        for doc in doc_batch:
+            yield doc
         
         # Return updated checkpoint
         return AzureDevOpsConnectorCheckpoint(
@@ -543,11 +592,11 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             raise ConnectorMissingCredentialError("Azure DevOps")
         
         # Convert epoch seconds to datetime if provided
-        start_time = datetime.fromtimestamp(start) if start else None
+        start_time = datetime.fromtimestamp(start, tz=timezone.utc) if start else None
         
         continuation_token = None
         has_more = True
-        slim_docs_batch = []
+        slim_docs_batch: List[SlimDocument] = []
         
         while has_more:
             try:
@@ -563,7 +612,7 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                 
                 # Update continuation token
                 continuation_token = result.get("continuationToken")
-                has_more = continuation_token is not None
+                has_more = continuation_token is not None and len(work_items) > 0
                 
                 # Process each work item ID into a slim document
                 for item in work_items:
@@ -586,6 +635,16 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                             if callback:
                                 callback.heartbeat()
             
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:  # Too Many Requests
+                    retry_after = int(e.response.headers.get('Retry-After', 30))
+                    logger.warning(f"Rate limited by Azure DevOps API. Waiting for {retry_after} seconds.")
+                    time.sleep(retry_after)
+                    # Continue with the next iteration
+                    continue
+                else:
+                    logger.error(f"HTTP error fetching work items for slim retrieval: {str(e)}")
+                    has_more = False
             except Exception as e:
                 logger.error(f"Failed to fetch work items for slim retrieval: {str(e)}")
                 has_more = False
