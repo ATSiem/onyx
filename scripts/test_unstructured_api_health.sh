@@ -23,11 +23,15 @@ UNSTRUCTURED_API_URL="http://localhost:8000"
 
 # Check if Unstructured API is running
 if ! curl -s "$UNSTRUCTURED_API_URL/healthcheck" | grep -q "HEALTHCHECK STATUS: EVERYTHING OK"; then
-  echo "ERROR: Unstructured API is not running or unreachable at $UNSTRUCTURED_API_URL"
-  echo "Please run the Unstructured API container with:"
-  echo "docker run --platform linux/amd64 -p 8000:8000 -d --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest"
-  rm -rf "$TEMP_DIR"
-  exit 1
+  echo "WARNING: Unstructured API is not running or unreachable at $UNSTRUCTURED_API_URL"
+  echo "Attempting to start/restart the Unstructured API..."
+  
+  # Use the ensure_unstructured_api.sh script to start the API
+  if ! "$REPO_ROOT/scripts/ensure_unstructured_api.sh"; then
+    echo "ERROR: Failed to start Unstructured API"
+    rm -rf "$TEMP_DIR"
+    exit 1
+  fi
 else
   echo "PASS: Unstructured API is running and healthy"
 fi

@@ -20,11 +20,19 @@ Both environments use a local Unstructured API:
 > **Note**: Both development and production environments are configured to use `http://host.docker.internal:8000` as the Unstructured API URL in their respective docker-compose files. This is set via the `UNSTRUCTURED_API_URL` environment variable in both `api_server` and `background` services.
 
 ```bash
+# Option 1: Use the helper script to automatically setup the Unstructured API
+# This will check if Docker is running, and if the container is running and start it if needed
+./scripts/ensure_unstructured_api.sh
+
+# Option 2: Manual setup
 # Download image
 docker pull --platform linux/amd64 downloads.unstructured.io/unstructured-io/unstructured-api:latest
 
-# Run locally
-docker run --platform linux/amd64 -p 8000:8000 -d --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
+# Run locally (no -d flag for interactive mode)
+docker run --platform linux/amd64 -p 8000:8000 --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
+
+# Alternatively, run in background with -d flag
+# docker run --platform linux/amd64 -p 8000:8000 -d --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
 
 # Generate and set up API key
 docker exec -it unstructured-api bash

@@ -10,12 +10,20 @@ echo "Running regression tests before merge..."
 # Run backend regression tests
 cd "$(git rev-parse --show-toplevel)/backend"
 echo "Running backend regression tests..."
+source ../.venv/bin/activate
 python -m pytest tests/unit/onyx/llm/test_llm_provider_options.py -v
 python -m pytest tests/unit/test_email_invites.py -v
 
 # Run Zulip schema tests
 echo "Running Zulip schema compatibility tests..."
 python -m pytest tests/unit/connectors/zulip/test_zulip_schema.py -v
+
+# Check if Docker is running before trying to run Docker-dependent tests
+if ! docker info > /dev/null 2>&1; then
+  echo "⚠️ Warning: Docker is not running. Skipping Unstructured API tests."
+  echo "Please start Docker Desktop and run this script again to complete all tests."
+  exit 0
+fi
 
 # Run Unstructured API integration check
 echo "Running Unstructured API integration check..."
