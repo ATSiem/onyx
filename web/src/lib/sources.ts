@@ -45,6 +45,7 @@ import {
   FileIcon2,
   GitbookIcon,
   HighspotIcon,
+  AzureDevOpsIcon,
 } from "@/components/icons/icons";
 import { ValidSources } from "./types";
 import {
@@ -335,6 +336,12 @@ export const SOURCE_METADATA_MAP: SourceMap = {
     displayName: "Highspot",
     category: SourceCategory.Wiki,
     docs: "https://docs.onyx.app/connectors/highspot",
+  },
+  azure_devops: {
+    icon: AzureDevOpsIcon,
+    displayName: "Azure DevOps",
+    category: SourceCategory.CodeRepository,
+    docs: "https://docs.onyx.app/connectors/azure-devops",
   },
   // currently used for the Internet Search tool docs, which is why
   // a globe is used

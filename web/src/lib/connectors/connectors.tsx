@@ -1290,6 +1290,56 @@ For example, specifying .*-support.* as a "channel" will cause the connector to 
     ],
     advanced_values: [],
   },
+  azure_devops: {
+    connector_specific_config: [
+      {
+        name: "organization",
+        label: "Organization",
+        type: "text",
+        description: "Your Azure DevOps organization name.",
+      },
+      {
+        name: "project",
+        label: "Project",
+        type: "text",
+        description: "Your Azure DevOps project name.",
+      },
+      {
+        name: "work_item_types",
+        label: "Work Item Types",
+        type: "list",
+        description: "Types of work items to index (leave empty for all types).",
+        default: ["Bug", "Epic", "Feature", "Issue", "Task", "UserStory"],
+        optional: true,
+      },
+      {
+        name: "include_comments",
+        label: "Include Comments",
+        type: "checkbox",
+        description: "Whether to include work item comments.",
+        default: true,
+        optional: true,
+      },
+      {
+        name: "include_attachments",
+        label: "Include Attachments",
+        type: "checkbox",
+        description: "Whether to include work item attachments (as links).",
+        default: false,
+        optional: true,
+      },
+    ],
+    credentials: [
+      {
+        name: "personal_access_token",
+        label: "Personal Access Token",
+        type: "text",
+        description:
+          "Your Azure DevOps Personal Access Token with read access to work items. Create one at https://dev.azure.com/[organization]/_usersSettings/tokens.",
+      },
+    ],
+    advanced_values: [],
+  },
 };
 export function createConnectorInitialValues(
   connector: ConfigurableSources
