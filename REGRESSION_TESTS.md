@@ -45,6 +45,7 @@ To run the regression tests manually:
 - Added API key management in `backend/onyx/file_processing/unstructured.py`
 - Integrated with document extraction pipeline in `extract_file_text.py`
 - Configured environment variables in docker-compose files
+- Added helper script to ensure Unstructured API is running
 
 **Tests:**
 - API Key Management: `backend/tests/unit/file_processing/test_unstructured.py`
@@ -52,6 +53,7 @@ To run the regression tests manually:
 - Document Pipeline Integration: `backend/tests/unit/file_processing/test_extract_file_text.py`
 - Code Integration Check: `scripts/check_unstructured_integration.sh`
 - API Health Check: `scripts/test_unstructured_api_health.sh` - Verifies a running Unstructured API can process documents by uploading a test text file and confirming the response
+- Container Management: `scripts/ensure_unstructured_api.sh` - Checks if the Unstructured API container is running and starts it if needed, preventing test failures due to missing API service
 
 ### 4. Zulip Connector Enhancements
 
