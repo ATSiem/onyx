@@ -137,54 +137,40 @@ def test_wiql_query(org, project, headers):
 
 
 def test_work_item_details(org, project, work_items, headers):
-    """Test fetching work item details with project in URL path"""
+    """Test fetching work item details with different URL formats"""
     if not work_items:
         print("❌ No work items available to test work item details API")
         return False
-        
+
     print("\n===== TESTING WORK ITEM DETAILS API =====")
-    # Get a limited subset of work items to test with
-    test_items = work_items[:3]  # Limit to 3 items for testing
-    item_ids = [item.get("id") for item in test_items]
-    ids_str = ",".join([str(item_id) for item_id in item_ids])
+    # Choose the first 3 work items to test
+    test_ids = work_items[:3]
+    ids_str = ",".join([str(item["id"]) for item in test_ids])
     
-    print(f"Testing with work item IDs: {ids_str}")
-    
-    # Test URL format 1: With project in path (correct format)
+    print(f"Testing with work item IDs: {ids_str}\n")
+
+    # Test 1: Using project in URL path (correct format)
     test_url_1 = f"https://dev.azure.com/{org}/{project}/_apis/wit/workitems?ids={ids_str}&fields=System.Id,System.Title,System.Description&api-version=7.0"
-    print(f"\nTest 1: Using project in URL path (correct format)")
+    print(f"Test 1: Using project in URL path (correct format)")
     print(f"URL: {test_url_1}")
     
     try:
         response_1 = requests.get(test_url_1, headers=headers)
         response_1.raise_for_status()
-        
         data_1 = response_1.json()
-        items_count_1 = len(data_1.get("value", []))
+        items_1 = data_1.get("value", [])
+        print(f"✅ Successfully fetched {len(items_1)} work items with project in URL path")
         
-        print(f"✅ Successfully fetched {items_count_1} work items with project in URL path")
-        
-        # Show a sample of the results
-        if items_count_1 > 0:
-            sample_item = data_1.get("value", [])[0]
-            fields = sample_item.get("fields", {})
-            print(f"\nSample work item:")
-            print(f"  ID: {fields.get('System.Id', 'Unknown')}")
-            print(f"  Title: {fields.get('System.Title', 'No title')}")
-            
-        success_1 = True
-    except Exception as e:
+        if items_1:
+            sample_item = items_1[0]
+            print("\nSample work item:")
+            print(f"  ID: {sample_item.get('id')}")
+            print(f"  Title: {sample_item.get('fields', {}).get('System.Title', 'N/A')}")
+    except requests.exceptions.RequestException as e:
         print(f"❌ Failed with project in URL path: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_details = e.response.json()
-                print(f"Error details: {error_details}")
-            except:
-                print(f"Error details: {e.response.text[:200]}")
-        
-        success_1 = False
-    
-    # Test URL format 2: With project as query parameter (incorrect format)
+        return False
+
+    # Test 2: Using project as query parameter (incorrect format)
     test_url_2 = f"https://dev.azure.com/{org}/_apis/wit/workitems?ids={ids_str}&fields=System.Id,System.Title&project={project}&api-version=7.0"
     print(f"\nTest 2: Using project as query parameter (incorrect format)")
     print(f"URL: {test_url_2}")
@@ -192,55 +178,37 @@ def test_work_item_details(org, project, work_items, headers):
     try:
         response_2 = requests.get(test_url_2, headers=headers)
         response_2.raise_for_status()
-        
         data_2 = response_2.json()
-        items_count_2 = len(data_2.get("value", []))
-        
-        print(f"✅ Fetched {items_count_2} work items with project as query parameter")
-        success_2 = True
-    except Exception as e:
+        items_2 = data_2.get("value", [])
+        print(f"✅ Fetched {len(items_2)} work items with project as query parameter")
+    except requests.exceptions.RequestException as e:
         print(f"❌ Failed with project as query parameter: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_details = e.response.json()
-                print(f"Error details: {error_details}")
-            except:
-                print(f"Error details: {e.response.text[:200]}")
-        
-        success_2 = False
-    
-    # Test URL format 3: With both project in path and $expand parameter
+        return False
+
+    # Test 3: Using project in path with $expand parameter (should fail)
     test_url_3 = f"https://dev.azure.com/{org}/{project}/_apis/wit/workitems?ids={ids_str}&fields=System.Id,System.Title&$expand=all&api-version=7.0"
-    print(f"\nTest 3: Using project in path with $expand parameter")
+    print(f"\nTest 3: Using project in path with $expand parameter (should fail)")
     print(f"URL: {test_url_3}")
     
     try:
         response_3 = requests.get(test_url_3, headers=headers)
         response_3.raise_for_status()
-        
-        data_3 = response_3.json()
-        items_count_3 = len(data_3.get("value", []))
-        
-        print(f"✅ Fetched {items_count_3} work items with project in path and $expand parameter")
-        success_3 = True
-    except Exception as e:
-        print(f"❌ Failed with project in path and $expand parameter: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_details = e.response.json()
-                print(f"Error details: {error_details}")
-            except:
-                print(f"Error details: {e.response.text[:200]}")
-        
-        success_3 = False
-    
-    # Summary
+        print("❌ Unexpected success with $expand parameter")
+        return False
+    except requests.exceptions.RequestException as e:
+        if hasattr(e, 'response') and e.response.status_code == 400:
+            print(f"✅ Correctly failed with $expand parameter: {str(e)}")
+            print(f"Error details: {e.response.json()}")
+        else:
+            print(f"❌ Failed with unexpected error: {str(e)}")
+            return False
+
     print("\nWork Items API Tests Summary:")
-    print(f"  Test 1 (Project in path): {'✅ Success' if success_1 else '❌ Failed'}")
-    print(f"  Test 2 (Project as query param): {'✅ Success' if success_2 else '❌ Failed'}")
-    print(f"  Test 3 (Project in path with $expand): {'✅ Success' if success_3 else '❌ Failed'}")
+    print("  Test 1 (Project in path): ✅ Success")
+    print("  Test 2 (Project as query param): ✅ Success")
+    print("  Test 3 (Project in path with $expand): ✅ Expected Failure")
     
-    return success_1
+    return True
 
 
 def test_work_item_comments(org, project, work_items, headers):
@@ -248,101 +216,77 @@ def test_work_item_comments(org, project, work_items, headers):
     if not work_items:
         print("❌ No work items available to test comments API")
         return False
-        
+
     print("\n===== TESTING WORK ITEM COMMENTS API =====")
     # Choose the first work item to test comments API
-    test_id = work_items[0].get("id")
-    print(f"Testing with work item ID: {test_id}")
+    test_id = work_items[0]["id"]
     
-    # Test 1: With project in path and preview flag (correct format)
+    print(f"Testing with work item ID: {test_id}\n")
+
+    # Test 1: Using project in path with preview flag (correct format)
     test_url_1 = f"https://dev.azure.com/{org}/{project}/_apis/wit/workItems/{test_id}/comments?api-version=7.0-preview"
-    print(f"\nTest 1: Using project in path with preview flag (correct format)")
+    print(f"Test 1: Using project in path with preview flag (correct format)")
     print(f"URL: {test_url_1}")
     
     try:
         response_1 = requests.get(test_url_1, headers=headers)
         response_1.raise_for_status()
-        
         data_1 = response_1.json()
         comments_count_1 = len(data_1.get("comments", []))
-        
         print(f"✅ Successfully fetched {comments_count_1} comments with project in path and preview flag")
         
-        # Show a sample comment if available
         if comments_count_1 > 0:
             sample_comment = data_1.get("comments", [])[0]
-            print(f"\nSample comment:")
-            print(f"  Text: {sample_comment.get('text', '(empty)')}")
-            
-        success_1 = True
-    except Exception as e:
+            print("\nSample comment:")
+            print(f"  Author: {sample_comment.get('createdBy', {}).get('displayName', 'N/A')}")
+            print(f"  Date: {sample_comment.get('createdDate', 'N/A')}")
+            print(f"  Text: {sample_comment.get('text', 'N/A')[:100]}...")
+    except requests.exceptions.RequestException as e:
         print(f"❌ Failed with project in path and preview flag: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_details = e.response.json()
-                print(f"Error details: {error_details}")
-            except:
-                print(f"Error details: {e.response.text[:200]}")
-        
-        success_1 = False
-    
-    # Test 2: With project in path but NO preview flag (incorrect format)
+        return False
+
+    # Test 2: Using project in path without preview flag (should fail)
     test_url_2 = f"https://dev.azure.com/{org}/{project}/_apis/wit/workItems/{test_id}/comments?api-version=7.0"
-    print(f"\nTest 2: Using project in path without preview flag (incorrect format)")
+    print(f"\nTest 2: Using project in path without preview flag (should fail)")
     print(f"URL: {test_url_2}")
     
     try:
         response_2 = requests.get(test_url_2, headers=headers)
         response_2.raise_for_status()
-        
-        data_2 = response_2.json()
-        comments_count_2 = len(data_2.get("comments", []))
-        
-        print(f"✅ Fetched {comments_count_2} comments without preview flag")
-        success_2 = True
-    except Exception as e:
-        print(f"❌ Failed without preview flag: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_details = e.response.json()
-                print(f"Error details: {error_details}")
-            except:
-                print(f"Error details: {e.response.text[:200]}")
-        
-        success_2 = False
-    
-    # Test 3: Without project in path (incorrect format)
+        print("❌ Unexpected success without preview flag")
+        return False
+    except requests.exceptions.RequestException as e:
+        if hasattr(e, 'response') and e.response.status_code == 400:
+            print(f"✅ Correctly failed without preview flag: {str(e)}")
+            print(f"Error details: {e.response.json()}")
+        else:
+            print(f"❌ Failed with unexpected error: {str(e)}")
+            return False
+
+    # Test 3: Using project as query parameter (should fail)
     test_url_3 = f"https://dev.azure.com/{org}/_apis/wit/workItems/{test_id}/comments?project={project}&api-version=7.0-preview"
-    print(f"\nTest 3: Using project as query parameter (incorrect format)")
+    print(f"\nTest 3: Using project as query parameter (should fail)")
     print(f"URL: {test_url_3}")
     
     try:
         response_3 = requests.get(test_url_3, headers=headers)
         response_3.raise_for_status()
-        
-        data_3 = response_3.json()
-        comments_count_3 = len(data_3.get("comments", []))
-        
-        print(f"✅ Fetched {comments_count_3} comments with project as query parameter")
-        success_3 = True
-    except Exception as e:
-        print(f"❌ Failed with project as query parameter: {str(e)}")
-        if hasattr(e, 'response') and e.response is not None:
-            try:
-                error_details = e.response.json()
-                print(f"Error details: {error_details}")
-            except:
-                print(f"Error details: {e.response.text[:200]}")
-        
-        success_3 = False
-    
-    # Summary
+        print("❌ Unexpected success with project as query parameter")
+        return False
+    except requests.exceptions.RequestException as e:
+        if hasattr(e, 'response') and e.response.status_code == 404:
+            print(f"✅ Correctly failed with project as query parameter: {str(e)}")
+            print(f"Error details: {e.response.text[:200]}")
+        else:
+            print(f"❌ Failed with unexpected error: {str(e)}")
+            return False
+
     print("\nComments API Tests Summary:")
-    print(f"  Test 1 (Project in path with preview flag): {'✅ Success' if success_1 else '❌ Failed'}")
-    print(f"  Test 2 (Project in path without preview flag): {'✅ Success' if success_2 else '❌ Failed'}")
-    print(f"  Test 3 (Project as query param): {'✅ Success' if success_3 else '❌ Failed'}")
+    print("  Test 1 (Project in path with preview flag): ✅ Success")
+    print("  Test 2 (Project in path without preview flag): ✅ Expected Failure")
+    print("  Test 3 (Project as query param): ✅ Expected Failure")
     
-    return success_1
+    return True
 
 
 def simulate_indexing(org, project, headers):
