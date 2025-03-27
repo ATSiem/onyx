@@ -232,11 +232,38 @@ Frontend tests use:
 
 The Jest configuration is in `web/jest.config.js` and Babel configuration in `web/babel.config.js`.
 
-#### Test Structure
-- **Unit Tests**: Focus on testing individual functions/components in isolation
-- **Regression Tests**: Ensure that fixed bugs don't reappear 
-- **Integration Tests**: Test interactions between components
-- **E2E Tests**: Use Playwright for end-to-end testing (in `web/tests/e2e/`)
+> **Note**: E2E tests using Playwright are not currently set up in this fork.
+
+#### Backend Testing
+The backend uses pytest for testing with the following structure:
+
+```bash
+# Run all backend tests
+cd backend
+python -m pytest
+
+# Run specific test file
+python -m pytest tests/unit/connectors/azure_devops/test_azure_devops_connector.py -v
+
+# Run all Azure DevOps connector tests (36 tests)
+python -m pytest tests/unit/connectors/azure_devops/test_*.py -v
+```
+
+Backend test categories:
+- **Unit Tests**: Individual function/class testing
+- **Integration Tests**: Component interaction testing
+- **Regression Tests**: Bug fix verification
+- **Connector Tests**: Specific tests for data connectors (e.g., Azure DevOps)
+
+#### Azure DevOps Connector Tests
+The Azure DevOps connector has 36 tests across multiple files:
+- `test_azure_devops_connector.py`: 12 tests (core connector functionality)
+- `test_azure_devops_credential_flow.py`: 4 tests (authentication)
+- `test_azure_devops_document.py`: 4 tests (document processing)
+- `test_azure_devops_independent.py`: 3 tests (utility functions)
+- `test_azure_devops_pagination.py`: 5 tests (pagination and batching)
+- `test_azure_devops_regression.py`: 2 tests (bug fixes)
+- `test_azure_devops_utils.py`: 6 tests (helper functions)
 
 #### Fork-Specific Regression Tests
 This fork contains specific regression tests to verify our custom fixes are maintained when merging from upstream:
@@ -245,6 +272,13 @@ This fork contains specific regression tests to verify our custom fixes are main
 # Run regression tests
 ./scripts/pre-merge-check.sh
 ```
+
+The pre-merge check script runs:
+1. Backend regression tests
+2. Email invite tests
+3. Zulip schema compatibility tests
+4. Unstructured API integration checks
+5. Unstructured API health check
 
 See `REGRESSION_TESTS.md` for details on the regression tests and how they protect our custom functionality.
 
