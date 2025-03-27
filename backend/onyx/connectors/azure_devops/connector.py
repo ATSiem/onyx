@@ -2,7 +2,7 @@
 import json
 import time
 from collections.abc import Generator, Iterator
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, cast
 
 import requests
@@ -36,6 +36,8 @@ from onyx.connectors.models import TextSection
 from onyx.indexing.indexing_heartbeat import IndexingHeartbeatInterface
 from onyx.utils.logger import setup_logger
 from onyx.utils.retry_wrapper import retry_builder
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
 
 logger = setup_logger()
 
@@ -82,6 +84,8 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         self.include_attachments = include_attachments
         self.client_config: Dict[str, Any] = {}
         self.personal_access_token: Optional[str] = None
+        self._context_cache = {}
+        self._cache_ttl = timedelta(minutes=5)
 
     @override
     def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
@@ -487,15 +491,10 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             logger.error(f"Error details: {error_detail}")
             raise ConnectorValidationError(f"Failed to execute WIQL query: {str(e)}")
 
+    @rate_limit_builder(max_calls=60, period=60)  # More conservative rate limiting
+    @retry_builder(tries=3, backoff=2)  # Add retry mechanism
     def _get_work_item_details(self, work_item_ids: List[int]) -> List[Dict[str, Any]]:
-        """Get detailed information for work items.
-        
-        Args:
-            work_item_ids: List of work item IDs
-            
-        Returns:
-            List of work item details
-        """
+        """Get detailed information for work items with improved rate limiting."""
         if not work_item_ids:
             return []
         
@@ -924,3 +923,61 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         # Yield any remaining documents
         if slim_docs_batch:
             yield slim_docs_batch
+
+    def _get_cached_context(self, work_item_id: int) -> Optional[Document]:
+        """Get cached context if available and not expired."""
+        if work_item_id in self._context_cache:
+            doc, timestamp = self._context_cache[work_item_id]
+            if datetime.now() - timestamp < self._cache_ttl:
+                return doc
+        return None
+
+    def _fetch_fresh_context(self, work_item_id: int) -> Optional[Document]:
+        """Fetch fresh context for a work item.
+        
+        Args:
+            work_item_id: The ID of the work item to fetch context for
+            
+        Returns:
+            Document object with fresh context, or None if the work item doesn't exist
+        """
+        try:
+            # Fetch work item details
+            work_item_details = self._get_work_item_details([work_item_id])
+            if not work_item_details:
+                logger.warning(f"Work item {work_item_id} not found")
+                return None
+                
+            # Process the work item into a document
+            document = self._process_work_item(work_item_details[0])
+            
+            # Log success
+            logger.info(f"Successfully fetched fresh context for work item {work_item_id}")
+            
+            return document
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch fresh context for work item {work_item_id}: {str(e)}")
+            return None
+        
+    def fetch_additional_context(self, work_item_id: int) -> Optional[Document]:
+        """Fetch additional context with caching."""
+        # Check cache first
+        cached_doc = self._get_cached_context(work_item_id)
+        if cached_doc:
+            return cached_doc
+            
+        # Fetch fresh data if not in cache
+        document = self._fetch_fresh_context(work_item_id)
+        if document:
+            self._context_cache[work_item_id] = (document, datetime.now())
+        return document
+
+    def fetch_additional_context_batch(self, work_item_ids: List[int]) -> List[Document]:
+        """Fetch additional context for multiple work items in parallel."""
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [
+                executor.submit(self.fetch_additional_context, work_item_id)
+                for work_item_id in work_item_ids
+            ]
+            return [f.result() for f in futures if f.result()]

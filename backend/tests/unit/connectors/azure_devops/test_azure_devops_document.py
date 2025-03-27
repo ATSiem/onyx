@@ -171,3 +171,228 @@ class TestAzureDevOpsDocument:
         # Verify that creator email is present
         expert_emails = [expert.email for expert in document.primary_owners]
         assert "creator@example.com" in expert_emails 
+
+    def test_fetch_additional_context(self):
+        """Test that the connector can fetch additional context for a work item when needed."""
+        # Create a connector instance
+        connector = AzureDevOpsConnector(
+            organization="testorg",
+            project="testproject",
+            work_item_types=["Bug"],
+            include_comments=True,
+        )
+        
+        # Mock the work item details API call
+        connector._get_work_item_details = MagicMock(return_value=[{
+            "id": 842,
+            "fields": {
+                "System.Title": "Test Bug",
+                "System.Description": "This is a test bug description",
+                "System.WorkItemType": "Bug",
+                "System.State": "Active",
+                "System.CreatedBy": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.CreatedDate": "2024-01-01T00:00:00Z",
+                "System.ChangedBy": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.ChangedDate": "2024-01-01T00:00:00Z",
+                "System.Tags": "Tag1; Tag2",
+                "System.AssignedTo": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.AreaPath": "TestProject\\Area",
+                "System.IterationPath": "TestProject\\Iteration",
+                "Microsoft.VSTS.Common.Priority": "1",
+                "Microsoft.VSTS.Common.Severity": "2 - High"
+            }
+        }])
+        
+        # Mock the comments API call
+        connector._get_work_item_comments = MagicMock(return_value=[{
+            "createdBy": {
+                "displayName": "Test User",
+                "email": "test@example.com"
+            },
+            "text": "This is a test comment",
+            "createdDate": "2024-01-01T00:00:00Z"
+        }])
+        
+        # Test fetching additional context for a work item
+        work_item_id = 842
+        document = connector.fetch_additional_context(work_item_id)
+        
+        # Verify that the API was called with the correct work item ID
+        connector._get_work_item_details.assert_called_once_with([work_item_id])
+        
+        # Verify the document was created correctly
+        assert document is not None
+        assert document.id == "azuredevops:testorg/testproject/workitem/842"
+        assert document.source == DocumentSource.AZURE_DEVOPS
+        assert document.semantic_identifier == "Bug 842: Test Bug"
+        assert "Test Bug" in document.sections[0].text
+        assert "This is a test bug description" in document.sections[0].text
+        assert document.metadata["type"] == "Bug"
+        assert document.metadata["state"] == "Active"
+        assert document.metadata["priority"] == "1"
+        assert document.metadata["severity"] == "2 - High"
+        
+        # Verify that comments were also fetched
+        connector._get_work_item_comments.assert_called_once_with(work_item_id)
+        
+        # Test caching
+        # Reset the mock to verify it's not called again
+        connector._get_work_item_details.reset_mock()
+        connector._get_work_item_comments.reset_mock()
+        
+        # Fetch the same work item again
+        cached_document = connector.fetch_additional_context(work_item_id)
+        
+        # Verify the cached document matches the original
+        assert cached_document is not None
+        assert cached_document.id == document.id
+        assert cached_document.semantic_identifier == document.semantic_identifier
+        
+        # Verify that the API methods were not called again
+        connector._get_work_item_details.assert_not_called()
+        connector._get_work_item_comments.assert_not_called()
+        
+        # Test with non-existent work item
+        connector._get_work_item_details.return_value = []
+        document = connector.fetch_additional_context(999)
+        assert document is None
+
+    def test_fetch_additional_context_batch(self):
+        """Test fetching additional context for multiple work items in parallel."""
+        # Create a connector instance
+        connector = AzureDevOpsConnector(
+            organization="testorg",
+            project="testproject",
+            work_item_types=["Bug"],
+            include_comments=True,
+        )
+        
+        # Mock the work item details API call
+        connector._get_work_item_details = MagicMock(return_value=[{
+            "id": 842,
+            "fields": {
+                "System.Title": "Test Bug 1",
+                "System.Description": "This is a test bug description",
+                "System.WorkItemType": "Bug",
+                "System.State": "Active",
+                "System.CreatedBy": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.CreatedDate": "2024-01-01T00:00:00Z",
+                "System.ChangedBy": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.ChangedDate": "2024-01-01T00:00:00Z",
+                "System.Tags": "Tag1; Tag2",
+                "System.AssignedTo": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.AreaPath": "TestProject\\Area",
+                "System.IterationPath": "TestProject\\Iteration",
+                "Microsoft.VSTS.Common.Priority": "1",
+                "Microsoft.VSTS.Common.Severity": "2 - High"
+            }
+        }, {
+            "id": 843,
+            "fields": {
+                "System.Title": "Test Bug 2",
+                "System.Description": "This is another test bug description",
+                "System.WorkItemType": "Bug",
+                "System.State": "Active",
+                "System.CreatedBy": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.CreatedDate": "2024-01-01T00:00:00Z",
+                "System.ChangedBy": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.ChangedDate": "2024-01-01T00:00:00Z",
+                "System.Tags": "Tag1; Tag2",
+                "System.AssignedTo": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.AreaPath": "TestProject\\Area",
+                "System.IterationPath": "TestProject\\Iteration",
+                "Microsoft.VSTS.Common.Priority": "1",
+                "Microsoft.VSTS.Common.Severity": "2 - High"
+            }
+        }])
+        
+        # Mock the comments API call
+        connector._get_work_item_comments = MagicMock(return_value=[{
+            "createdBy": {
+                "displayName": "Test User",
+                "email": "test@example.com"
+            },
+            "text": "This is a test comment",
+            "createdDate": "2024-01-01T00:00:00Z"
+        }])
+        
+        # Test fetching additional context for multiple work items
+        work_item_ids = [842, 843]
+        documents = connector.fetch_additional_context_batch(work_item_ids)
+        
+        # Verify that we got two documents
+        assert len(documents) == 2
+        
+        # Verify the documents were created correctly
+        assert documents[0].id == "azuredevops:testorg/testproject/workitem/842"
+        assert documents[1].id == "azuredevops:testorg/testproject/workitem/843"
+        assert documents[0].semantic_identifier == "Bug 842: Test Bug 1"
+        assert documents[1].semantic_identifier == "Bug 843: Test Bug 2"
+        
+        # Verify that the API methods were called for both work items
+        assert connector._get_work_item_details.call_count == 1
+        assert connector._get_work_item_comments.call_count == 2
+        
+        # Test with a mix of existing and non-existent work items
+        connector._get_work_item_details.return_value = [{
+            "id": 842,
+            "fields": {
+                "System.Title": "Test Bug 1",
+                "System.Description": "This is a test bug description",
+                "System.WorkItemType": "Bug",
+                "System.State": "Active",
+                "System.CreatedBy": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.CreatedDate": "2024-01-01T00:00:00Z",
+                "System.ChangedBy": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.ChangedDate": "2024-01-01T00:00:00Z",
+                "System.Tags": "Tag1; Tag2",
+                "System.AssignedTo": {
+                    "displayName": "Test User",
+                    "email": "test@example.com"
+                },
+                "System.AreaPath": "TestProject\\Area",
+                "System.IterationPath": "TestProject\\Iteration",
+                "Microsoft.VSTS.Common.Priority": "1",
+                "Microsoft.VSTS.Common.Severity": "2 - High"
+            }
+        }]
+        
+        work_item_ids = [842, 999, 843]
+        documents = connector.fetch_additional_context_batch(work_item_ids)
+        
+        # Verify that we only got one document (the existing one)
+        assert len(documents) == 1
+        assert documents[0].id == "azuredevops:testorg/testproject/workitem/842" 
