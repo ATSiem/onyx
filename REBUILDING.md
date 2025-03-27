@@ -209,6 +209,22 @@ For email invites to work properly, ensure `MULTI_TENANT=true` is set in your `.
 
 ### Testing
 
+#### Pre-Merge and Azure DevOps Tests
+Before rebuilding the development environment, run the pre-merge check script which includes:
+1. Backend regression tests
+2. Email invite tests
+3. Zulip schema compatibility tests
+4. Unstructured API integration checks
+5. Unstructured API health check
+6. Azure DevOps connector tests (40 tests)
+
+```bash
+# Run all pre-merge checks and Azure DevOps tests
+./scripts/pre-merge-check.sh
+```
+
+The pre-merge check script will run all necessary tests in sequence. If any test fails, the script will stop and report the error.
+
 #### Frontend Testing
 The Onyx codebase uses Jest for frontend testing with the following setup:
 
@@ -245,7 +261,7 @@ python -m pytest
 # Run specific test file
 python -m pytest tests/unit/connectors/azure_devops/test_azure_devops_connector.py -v
 
-# Run all Azure DevOps connector tests (36 tests)
+# Run all Azure DevOps connector tests (40 tests)
 python -m pytest tests/unit/connectors/azure_devops/test_*.py -v
 ```
 
@@ -256,14 +272,15 @@ Backend test categories:
 - **Connector Tests**: Specific tests for data connectors (e.g., Azure DevOps)
 
 #### Azure DevOps Connector Tests
-The Azure DevOps connector has 36 tests across multiple files:
-- `test_azure_devops_connector.py`: 12 tests (core connector functionality)
-- `test_azure_devops_credential_flow.py`: 4 tests (authentication)
-- `test_azure_devops_document.py`: 4 tests (document processing)
-- `test_azure_devops_independent.py`: 3 tests (utility functions)
-- `test_azure_devops_pagination.py`: 5 tests (pagination and batching)
-- `test_azure_devops_regression.py`: 2 tests (bug fixes)
-- `test_azure_devops_utils.py`: 6 tests (helper functions)
+The Azure DevOps connector has 40 tests across multiple files:
+- `test_azure_devops_connector.py`: Core connector functionality
+- `test_azure_devops_credential_flow.py`: Authentication
+- `test_azure_devops_document.py`: Document processing
+- `test_azure_devops_independent.py`: Utility functions
+- `test_azure_devops_pagination.py`: Pagination and batching
+- `test_azure_devops_regression.py`: Bug fixes
+- `test_azure_devops_resolution_status.py`: Resolution status handling
+- `test_azure_devops_utils.py`: Helper functions
 
 #### Fork-Specific Regression Tests
 This fork contains specific regression tests to verify our custom fixes are maintained when merging from upstream:
@@ -279,6 +296,7 @@ The pre-merge check script runs:
 3. Zulip schema compatibility tests
 4. Unstructured API integration checks
 5. Unstructured API health check
+6. Azure DevOps connector tests
 
 See `REGRESSION_TESTS.md` for details on the regression tests and how they protect our custom functionality.
 
