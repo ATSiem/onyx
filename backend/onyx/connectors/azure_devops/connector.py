@@ -42,14 +42,20 @@ from concurrent.futures import ThreadPoolExecutor
 logger = setup_logger()
 
 # Constants
-MAX_RESULTS_PER_PAGE = 100
-MAX_WORK_ITEM_SIZE = 500000  # 500 KB in bytes
+MAX_RESULTS_PER_PAGE = 200  # Azure DevOps API can handle larger page sizes
+MAX_WORK_ITEM_SIZE = 1000000  # 1MB - Azure DevOps API can handle larger responses
+MAX_BATCH_SIZE = 200  # Maximum number of work items to fetch in a single batch
 WORK_ITEM_TYPES = ["Bug", "Epic", "Feature", "Issue", "Task", "TestCase", "UserStory"]
+AZURE_DEVOPS_BASE_URL = "https://dev.azure.com"
 
 # Rate limit settings based on Azure DevOps documentation
 # Azure DevOps recommends responding to Retry-After headers and has a global consumption limit
 # of 200 Azure DevOps throughput units (TSTUs) within a sliding 5-minute window
-MAX_API_CALLS_PER_MINUTE = 60  # Conservative limit to avoid hitting rate limits
+MAX_API_CALLS_PER_MINUTE = 60  # Back to original value since we're handling rate limits properly
+
+# Constants for Azure DevOps API
+API_VERSION = "7.0"
+BASE_URL_TEMPLATE = "https://dev.azure.com/{organization}/{project}/"  # Note the trailing slash
 
 
 class AzureDevOpsConnectorCheckpoint(ConnectorCheckpoint):
@@ -59,6 +65,13 @@ class AzureDevOpsConnectorCheckpoint(ConnectorCheckpoint):
 
 class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], SlimConnector):
     """Connector for Microsoft Azure DevOps."""
+
+    # Class-level constants
+    MAX_BATCH_SIZE = 200  # Maximum number of work items to fetch in a single batch
+    MAX_RESULTS_PER_PAGE = 200  # Azure DevOps API can handle larger page sizes
+    MAX_WORK_ITEM_SIZE = 1000000  # 1MB - Azure DevOps API can handle larger responses
+    WORK_ITEM_TYPES = ["Bug", "Epic", "Feature", "Issue", "Task", "TestCase", "UserStory"]
+    MAX_API_CALLS_PER_MINUTE = 60  # Back to original value since we're handling rate limits properly
 
     def __init__(
         self,
@@ -77,41 +90,42 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             include_comments: Whether to include work item comments
             include_attachments: Whether to include work item attachments (as links)
         """
+        super().__init__()
         self.organization = organization
         self.project = project
-        self.work_item_types = work_item_types or WORK_ITEM_TYPES
+        self.work_item_types = work_item_types or self.WORK_ITEM_TYPES
         self.include_comments = include_comments
         self.include_attachments = include_attachments
-        self.client_config: Dict[str, Any] = {}
+        self.base_url = BASE_URL_TEMPLATE.format(organization=organization, project=project)
+        self.client_config = {}  # Initialize as empty dict, will be populated when credentials are loaded
         self.personal_access_token: Optional[str] = None
         self._context_cache = {}
         self._cache_ttl = timedelta(minutes=5)
 
     @override
-    def load_credentials(self, credentials: dict[str, Any]) -> dict[str, Any] | None:
-        """Load credentials for the Azure DevOps connector.
-        
+    def load_credentials(self, credentials: Dict[str, Any]) -> None:
+        """Load Azure DevOps credentials from the provided dictionary.
+
         Args:
-            credentials: Dictionary containing the personal access token
-            
-        Returns:
-            None, as credentials are stored in the connector instance
-            
+            credentials: Dictionary containing Azure DevOps credentials
+                Expected format:
+                {
+                    "personal_access_token": "your-pat-token"
+                }
+
         Raises:
-            ConnectorMissingCredentialError: If credentials are missing
+            ConnectorMissingCredentialError: If credentials are missing or invalid
         """
         if not credentials:
             raise ConnectorMissingCredentialError("Azure DevOps")
-        
+
         if "personal_access_token" not in credentials:
             raise ConnectorMissingCredentialError("Azure DevOps - Personal Access Token required")
-        
+
         self.personal_access_token = credentials["personal_access_token"]
-        self.client_config = build_azure_devops_client(
-            credentials, self.organization, self.project
-        )
         
-        return None
+        # Set up client config with credentials using the utility function
+        self.client_config = build_azure_devops_client(credentials, self.organization, self.project)
 
     def validate_connector_settings(self) -> None:
         """Validate the connector settings by making a test API call.
@@ -192,7 +206,7 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                     # Try with variant spellings (UserStory vs User Story)
                     for original_type in original_types:
                         if original_type not in found_types:
-                            # Check common variants
+                            # Check common variations
                             if original_type == "User Story" and "UserStory" in available_type_set:
                                 found_types.add("UserStory")
                             elif original_type == "UserStory" and "User Story" in available_type_set:
@@ -256,22 +270,7 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         data: str = None,
         organization_level: bool = False
     ) -> requests.Response:
-        """Make an API request to Azure DevOps with rate limiting and retry logic.
-        
-        Args:
-            endpoint: API endpoint relative to the organization/project
-            method: HTTP method
-            params: URL parameters
-            data: Request body for POST requests
-            organization_level: Whether this is an organization-level API call
-                               (no project in path)
-            
-        Returns:
-            Response object
-            
-        Raises:
-            ConnectorValidationError: If the API call fails
-        """
+        """Make an API request to Azure DevOps with rate limiting and retry logic."""
         if not self.client_config:
             raise ConnectorValidationError("Azure DevOps client not configured")
         
@@ -497,78 +496,86 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         """Get detailed information for work items with improved rate limiting."""
         if not work_item_ids:
             return []
-        
-        # Build comma-separated list of IDs
-        ids_str = ",".join([str(wid) for wid in work_item_ids])
-        
-        # Build fields list to retrieve
-        fields = [
-            "System.Id",
-            "System.Title",
-            "System.Description",
-            "System.WorkItemType",
-            "System.State",
-            "System.CreatedBy",
-            "System.CreatedDate",
-            "System.ChangedBy",
-            "System.ChangedDate",
-            "System.Tags",
-            "System.AssignedTo",
-            "System.AreaPath",
-            "System.IterationPath",
-            "Microsoft.VSTS.Common.Priority",
-            "Microsoft.VSTS.Common.Severity",
-            "System.History"  # For changelog
-        ]
-        
-        fields_str = ",".join(fields)
-        
-        # Detailed logging to debug API issues
-        logger.info(f"Fetching details for work items: {ids_str}")
-        
-        try:
-            # Make the request
-            # NOTE: Using the project in the URL path (not as a query parameter)
-            # Also removing $expand parameter as it conflicts with fields parameter
-            response = self._make_api_request(
-                f"{self.project}/_apis/wit/workitems",
-                params={
-                    "ids": ids_str,
-                    "fields": fields_str
-                },
-                organization_level=True  # Use organization-level URL
-            )
-            
-            response.raise_for_status()
-            result = response.json()
-            logger.info(f"Successfully fetched {len(result.get('value', []))} work items")
-            return result.get("value", [])
-            
-        except requests.exceptions.RequestException as e:
-            # Get more details about the error
-            error_detail = ""
-            if hasattr(e, 'response') and e.response is not None:
-                try:
-                    error_detail = e.response.json()
-                except:
-                    error_detail = e.response.text
-                
-            logger.error(f"HTTP error fetching work items: {str(e)}")
-            logger.error(f"Error details: {error_detail}")
-            
-            # For Azure DevOps, let's be explicit about certain error types
-            if hasattr(e, 'response'):
-                if e.response.status_code == 401:
-                    logger.error("Authentication failed. Check your Personal Access Token.")
-                elif e.response.status_code == 403:
-                    logger.error("Authorization failed. Verify your PAT has 'Read' permissions for Work Items.")
-                elif e.response.status_code == 404:
-                    logger.error(f"Work items not found. Verify the work item IDs exist: {ids_str}")
-                elif e.response.status_code == 400:
-                    logger.error("Bad request. The request may be malformed or invalid work items were specified.")
-            
-            # Re-raise as ConnectorValidationError for the indexing process to handle
-            raise ConnectorValidationError(f"Failed to fetch work items: {str(e)}")
+
+        # First check cache for all work items
+        all_work_items = []
+        uncached_ids = []
+
+        for work_item_id in work_item_ids:
+            cached_doc = self._get_cached_context(work_item_id)
+            if cached_doc:
+                # Extract the work item details from the cached document
+                work_item = {
+                    "id": work_item_id,
+                    "fields": {
+                        "System.Id": work_item_id,
+                        "System.Title": cached_doc.title.split(": ", 1)[1] if ": " in cached_doc.title else cached_doc.title,
+                        "System.Description": cached_doc.sections[0].text if cached_doc.sections else "",
+                        "System.WorkItemType": cached_doc.metadata.get("type", ""),
+                        "System.State": cached_doc.metadata.get("state", ""),
+                        "System.CreatedDate": cached_doc.doc_updated_at.isoformat() if cached_doc.doc_updated_at else None,
+                        "System.ChangedDate": cached_doc.doc_updated_at.isoformat() if cached_doc.doc_updated_at else None,
+                        "System.Tags": "; ".join(cached_doc.metadata.get("tags", [])),
+                        "System.AreaPath": cached_doc.metadata.get("area_path", ""),
+                        "System.IterationPath": cached_doc.metadata.get("iteration_path", ""),
+                        "Microsoft.VSTS.Common.Priority": cached_doc.metadata.get("priority", ""),
+                        "Microsoft.VSTS.Common.Severity": cached_doc.metadata.get("severity", ""),
+                        "System.ResolvedDate": cached_doc.metadata.get("resolved_date", ""),
+                        "Microsoft.VSTS.Common.ClosedDate": cached_doc.metadata.get("closed_date", ""),
+                        "Microsoft.VSTS.Common.Resolution": cached_doc.metadata.get("resolution", ""),
+                        "System.ResolvedBy": cached_doc.metadata.get("resolved_by", ""),
+                        "System.ClosedBy": cached_doc.metadata.get("closed_by", ""),
+                        "System.ClosedDate": cached_doc.metadata.get("closed_date", ""),
+                    }
+                }
+                all_work_items.append(work_item)
+            else:
+                uncached_ids.append(work_item_id)
+
+        # If we have uncached IDs, fetch them in batches
+        if uncached_ids:
+            for i in range(0, len(uncached_ids), self.MAX_BATCH_SIZE):
+                batch_ids = uncached_ids[i:i + self.MAX_BATCH_SIZE]
+                batch_ids_str = ",".join(map(str, batch_ids))
+
+                # Build the URL for the batch request
+                endpoint = f"_apis/wit/workitems"
+                params = {
+                    "ids": batch_ids_str,
+                    "fields": ",".join([
+                        "System.Id",
+                        "System.Title",
+                        "System.Description",
+                        "System.WorkItemType",
+                        "System.State",
+                        "System.CreatedBy",
+                        "System.CreatedDate",
+                        "System.ChangedBy",
+                        "System.ChangedDate",
+                        "System.Tags",
+                        "System.AssignedTo",
+                        "System.AreaPath",
+                        "System.IterationPath",
+                        "Microsoft.VSTS.Common.Priority",
+                        "Microsoft.VSTS.Common.Severity",
+                        "System.ResolvedDate",
+                        "Microsoft.VSTS.Common.ClosedDate",
+                        "Microsoft.VSTS.Common.Resolution",
+                        "System.ResolvedBy",
+                        "System.ClosedBy",
+                        "System.ClosedDate"
+                    ])
+                }
+
+                response = self._make_api_request(endpoint, method="GET", params=params)
+                response.raise_for_status()
+
+                # Process the response
+                batch_data = response.json()
+                if "value" in batch_data:
+                    all_work_items.extend(batch_data["value"])
+
+        return all_work_items
 
     def _get_work_item_comments(self, work_item_id: int) -> List[Dict[str, Any]]:
         """Get comments for a work item.
@@ -595,102 +602,250 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             logger.warning(f"Failed to get comments for work item {work_item_id}: {str(e)}")
             return []
 
-    def _process_work_item(self, work_item: Dict[str, Any]) -> Document:
-        """Process a work item into a Document.
+    def _process_work_item(self, work_item: Dict[str, Any], comments: Optional[List[Dict[str, Any]]] = None) -> Optional[Document]:
+        """Process a work item into a Document object.
+
+        Args:
+            work_item: The work item data from Azure DevOps
+            comments: Optional list of comments for the work item
+
+        Returns:
+            Document object if successful, None otherwise
+        """
+        try:
+            fields = work_item.get("fields", {})
+            work_item_id = str(work_item.get("id"))
+            
+            # Extract basic fields
+            title = fields.get("System.Title", "")
+            description = fields.get("System.Description", "")
+            work_item_type = fields.get("System.WorkItemType", "")
+            state = fields.get("System.State", "")
+            
+            # Get the work item URL from _links if available
+            item_url = work_item.get("_links", {}).get("html", {}).get("href")
+            if not item_url:
+                # Build URL for the work item as fallback
+                base_url = self.client_config.get("base_url", "")
+                if not base_url:
+                    base_url = f"https://dev.azure.com/{self.organization}/{self.project}"
+                item_url = build_azure_devops_url(
+                    base_url, 
+                    work_item_id, 
+                    "workitems"
+                )
+            
+            # Create sections
+            sections = []
+            
+            # Determine resolution status early so we can use it in the semantic identifier
+            resolution_status = self._determine_resolution_status(fields)
+            
+            # Build main content section with improved structure
+            content_parts = []
+            # Add resolution status in the title for better visibility in citations
+            content_parts.append(f"Title: {title} [{resolution_status}]")
+            if description:
+                content_parts.append(f"\nDescription:\n{description}")
+            
+            # Add status information with improved detail and structure
+            status_parts = []
+            if state:
+                status_parts.append(f"Status: {state}")
+            
+            # Add resolution information with clarity about which fields are used
+            resolved_date = fields.get("System.ResolvedDate")
+            if resolved_date:
+                status_parts.append(f"Resolved Date: {format_date(resolved_date)}")
+            
+            closed_date = fields.get("Microsoft.VSTS.Common.ClosedDate")
+            if closed_date:
+                status_parts.append(f"Closed Date: {format_date(closed_date)}")
+            
+            resolution = fields.get("Microsoft.VSTS.Common.Resolution")
+            if resolution:
+                status_parts.append(f"Resolution: {resolution}")
+            else:
+                # Be explicit when resolution is not set
+                status_parts.append("Resolution: Not Set")
+            
+            # Add explicit resolution status with confidence information
+            status_parts.append(f"Resolution Status: {resolution_status}")
+            
+            # Add URL information
+            status_parts.append(f"Original URL: {item_url}")
+            
+            if status_parts:
+                content_parts.append(f"\nStatus Information:\n" + "\n".join(status_parts))
+            
+            # Add comments if present and enabled
+            if comments:
+                content_parts.append("\nComments:")
+                for comment in comments:
+                    author = comment.get("createdBy", {}).get("displayName", "Unknown")
+                    text = comment.get("text", "")
+                    date = comment.get("createdDate", "")
+                    content_parts.append(f"- {author} ({date}): {text}")
+            
+            sections.append(TextSection(
+                text="\n".join(content_parts),
+                link=item_url
+            ))
+            
+            # Extract metadata with improved resolution status handling
+            metadata = {
+                "type": work_item_type or "",
+                "state": state or "",
+                "area_path": fields.get("System.AreaPath", ""),
+                "iteration_path": fields.get("System.IterationPath", ""),
+                "priority": str(fields.get("Microsoft.VSTS.Common.Priority", "")),
+                "severity": str(fields.get("Microsoft.VSTS.Common.Severity", "")),
+                "tags": fields.get("System.Tags", "").split("; ") if fields.get("System.Tags") else [],
+                "resolution_status": resolution_status,
+                "original_url": item_url  # Always include the URL in metadata
+            }
+            
+            # Include explicit boolean fields for resolved status
+            has_resolved_date = resolved_date is not None
+            has_closed_date = closed_date is not None
+            has_resolution = resolution is not None
+            
+            metadata["has_resolution_field"] = "true" if has_resolution else "false"
+            metadata["has_resolved_date"] = "true" if has_resolved_date else "false"
+            metadata["has_closed_date"] = "true" if has_closed_date else "false"
+            metadata["is_resolved"] = "true" if (has_resolved_date or has_closed_date or has_resolution) else "false"
+
+            # Add resolution-related fields only if they are set
+            if resolution:
+                metadata["resolution"] = resolution
+            if resolved_date:
+                # Ensure we store a string, not a datetime object, with Z format
+                resolved_date_str = format_date(resolved_date)
+                if isinstance(resolved_date_str, datetime):
+                    resolved_date_str = resolved_date_str.strftime("%Y-%m-%dT%H:%M:%SZ")
+                elif isinstance(resolved_date_str, str) and "+00:00" in resolved_date_str:
+                    resolved_date_str = resolved_date_str.replace("+00:00", "Z")
+                metadata["resolved_date"] = resolved_date_str
+            if closed_date:
+                # Ensure we store a string, not a datetime object, with Z format
+                closed_date_str = format_date(closed_date)
+                if isinstance(closed_date_str, datetime):
+                    closed_date_str = closed_date_str.strftime("%Y-%m-%dT%H:%M:%SZ")
+                elif isinstance(closed_date_str, str) and "+00:00" in closed_date_str:
+                    closed_date_str = closed_date_str.replace("+00:00", "Z")
+                metadata["closed_date"] = closed_date_str
+            if resolved_by := fields.get("System.ResolvedBy"):
+                if isinstance(resolved_by, dict):
+                    metadata["resolved_by"] = resolved_by.get("displayName", "")
+                else:
+                    metadata["resolved_by"] = str(resolved_by)
+            if closed_by := fields.get("System.ClosedBy"):
+                if isinstance(closed_by, dict):
+                    metadata["closed_by"] = closed_by.get("displayName", "")
+                else:
+                    metadata["closed_by"] = str(closed_by)
+            
+            # Extract dates
+            created_date = fields.get("System.CreatedDate")
+            if created_date:
+                doc_created_at = format_date(created_date)
+                # Ensure we have a datetime, not a string
+                if isinstance(doc_created_at, str):
+                    doc_created_at = datetime.fromisoformat(doc_created_at.replace("Z", "+00:00"))
+            else:
+                doc_created_at = None
+                
+            changed_date = fields.get("System.ChangedDate")
+            if changed_date:
+                doc_updated_at = format_date(changed_date)
+                # Ensure we have a datetime, not a string
+                if isinstance(doc_updated_at, str):
+                    doc_updated_at = datetime.fromisoformat(doc_updated_at.replace("Z", "+00:00"))
+            else:
+                doc_updated_at = None
+            
+            # Build semantic identifier
+            # Include resolution status in the semantic identifier for better visibility in citation displays
+            semantic_identifier = f"{work_item_type} {work_item_id}: {title} [{resolution_status}]"
+            
+            # Extract primary owners
+            primary_owners = []
+            
+            # Add creator if available
+            creator = fields.get("System.CreatedBy")
+            if creator:
+                creator_info = {
+                    "display_name": creator.get("displayName", ""),
+                    "email": creator.get("uniqueName", "")
+                }
+                primary_owners.append(creator_info)
+            
+            # Add assignee if available and different from creator
+            assignee = fields.get("System.AssignedTo")
+            if assignee:
+                assignee_email = assignee.get("uniqueName", "")
+                if not any(owner.get("email") == assignee_email for owner in primary_owners):
+                    assignee_info = {
+                        "display_name": assignee.get("displayName", ""),
+                        "email": assignee_email
+                    }
+                    primary_owners.append(assignee_info)
+            
+            # Create document
+            return Document(
+                id=f"azuredevops:{self.organization}/{self.project}/workitem/{work_item_id}",
+                title=f"[{resolution_status}] {semantic_identifier}",
+                semantic_identifier=semantic_identifier,
+                sections=sections,
+                metadata=metadata,
+                source=DocumentSource.AZURE_DEVOPS,
+                doc_created_at=doc_created_at,
+                doc_updated_at=doc_updated_at,
+                link=item_url,
+                primary_owners=primary_owners if primary_owners else None
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to process work item {work_item.get('id')}: {str(e)}")
+            return None
+
+    def _determine_resolution_status(self, fields: Dict[str, Any]) -> str:
+        """Determine the resolution status of a work item with confidence indicators.
         
         Args:
-            work_item: Work item data
+            fields: Dictionary of work item fields
             
         Returns:
-            Document object
+            String indicating resolution status with confidence level when appropriate
         """
-        work_item_id = str(get_item_field_value(work_item, "System.Id"))
-        title = get_item_field_value(work_item, "System.Title", "")
-        description = get_item_field_value(work_item, "System.Description", "")
-        work_item_type = get_item_field_value(work_item, "System.WorkItemType", "")
-        state = get_item_field_value(work_item, "System.State", "")
+        state = fields.get("System.State", "").lower()
+        resolution = fields.get("Microsoft.VSTS.Common.Resolution", "")
+        resolved_date = fields.get("System.ResolvedDate")
+        closed_date = fields.get("Microsoft.VSTS.Common.ClosedDate") or fields.get("System.ClosedDate")
         
-        # Create content sections
-        content = f"Title: {title}\n\n"
+        # Build a clear resolution status with a deterministic process
         
-        if description:
-            content += f"Description:\n{description}\n\n"
+        # 1. Explicit resolution field has highest priority
+        if resolution:
+            return "Resolved"
         
-        # Get comments if enabled
-        if self.include_comments and "id" in work_item:
-            comments = self._get_work_item_comments(work_item["id"])
-            if comments:
-                content += "Comments:\n"
-                for comment in comments:
-                    content += f"- {comment.get('createdBy', {}).get('displayName', 'Unknown')}: {comment.get('text', '')}\n"
-                content += "\n"
+        # 2. Explicit date fields have high priority
+        if resolved_date:
+            return "Resolved"
+        elif closed_date:
+            return "Closed"
         
-        # Build URL for the work item
-        item_url = build_azure_devops_url(
-            self.client_config["base_url"], 
-            work_item_id, 
-            "workitems"
-        )
+        # 3. State-based determination
+        resolved_states = ["resolved", "closed", "done", "completed", "fixed"]
+        active_states = ["new", "active", "in progress", "to do", "open"]
         
-        # Create document ID in the format "azuredevops:org/project/workitem/id"
-        document_id = f"azuredevops:{self.organization}/{self.project}/workitem/{work_item_id}"
+        if state in resolved_states:
+            return "Resolved"
+        elif state in active_states:
+            return "Not Resolved"
         
-        # Process owners
-        primary_owners = []
-        
-        # Creator
-        creator_info = get_user_info_from_item(work_item, "System.CreatedBy")
-        if creator_info:
-            primary_owners.append(creator_info)
-        
-        # Assigned To
-        assignee_info = get_user_info_from_item(work_item, "System.AssignedTo")
-        if assignee_info and assignee_info not in primary_owners:
-            primary_owners.append(assignee_info)
-        
-        # Build metadata
-        metadata = {
-            "type": work_item_type,
-            "state": state,
-        }
-        
-        # Add priority if available
-        priority = get_item_field_value(work_item, "Microsoft.VSTS.Common.Priority")
-        if priority:
-            metadata["priority"] = str(priority)
-        
-        # Add severity if available (usually for bugs)
-        severity = get_item_field_value(work_item, "Microsoft.VSTS.Common.Severity")
-        if severity:
-            metadata["severity"] = str(severity)
-        
-        # Add tags if available
-        tags = get_item_field_value(work_item, "System.Tags")
-        if tags:
-            metadata["tags"] = [tag.strip() for tag in tags.split(';') if tag.strip()]
-        
-        # Add area path
-        area_path = get_item_field_value(work_item, "System.AreaPath")
-        if area_path:
-            metadata["area_path"] = area_path
-        
-        # Add iteration path
-        iteration_path = get_item_field_value(work_item, "System.IterationPath")
-        if iteration_path:
-            metadata["iteration_path"] = iteration_path
-        
-        # Create the document
-        return Document(
-            id=document_id,
-            sections=[TextSection(link=item_url, text=content)],
-            source=DocumentSource.AZURE_DEVOPS,
-            semantic_identifier=f"{work_item_type} {work_item_id}: {title}",
-            title=f"{work_item_type} {work_item_id}: {title}",
-            url=item_url,
-            doc_updated_at=format_date(get_item_field_value(work_item, "System.ChangedDate")),
-            primary_owners=primary_owners if primary_owners else None,
-            metadata=metadata,
-        )
+        # 4. If we can't determine status, be explicit about it
+        return "Unknown"
 
     @override
     def load_from_checkpoint(
@@ -929,55 +1084,173 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         if work_item_id in self._context_cache:
             doc, timestamp = self._context_cache[work_item_id]
             if datetime.now() - timestamp < self._cache_ttl:
-                return doc
+                # Ensure the doc has complete information
+                if doc and doc.metadata and "resolution_status" in doc.metadata:
+                    return doc
         return None
 
-    def _fetch_fresh_context(self, work_item_id: int) -> Optional[Document]:
-        """Fetch fresh context for a work item.
+    def _store_in_cache(self, work_item_id: int, document: Document) -> None:
+        """Store a document in the cache.
         
         Args:
-            work_item_id: The ID of the work item to fetch context for
-            
+            work_item_id: The ID of the work item
+            document: The document to store in the cache
+        """
+        if document and document.metadata:
+            # Verify document has all necessary metadata before caching
+            self._context_cache[work_item_id] = (document, datetime.now())
+
+    def fetch_additional_context(self, work_item_id: int, force_refresh: bool = False) -> Optional[Document]:
+        """Fetch additional context for a work item.
+
+        Args:
+            work_item_id: The ID of the work item to fetch context for.
+            force_refresh: If True, bypass cache and fetch fresh data.
+
         Returns:
-            Document object with fresh context, or None if the work item doesn't exist
+            Document object if successful, None otherwise.
         """
         try:
-            # Fetch work item details
-            work_item_details = self._get_work_item_details([work_item_id])
-            if not work_item_details:
-                logger.warning(f"Work item {work_item_id} not found")
+            # Check cache unless force refresh is requested
+            if not force_refresh:
+                cached_doc = self._get_cached_context(work_item_id)
+                if cached_doc:
+                    logger.info(f"Using cached context for work item {work_item_id}")
+                    return cached_doc
+
+            # Fetch work item details with all necessary fields
+            logger.info(f"Fetching fresh context for work item {work_item_id}")
+            work_items = self._get_work_item_details([work_item_id])
+            if not work_items:
+                logger.warning(f"No work item found for ID {work_item_id}")
                 return None
+
+            work_item = work_items[0]  # We only requested one item
+            
+            # Ensure work item has _links or a fallback URL
+            if not work_item.get("_links", {}).get("html", {}).get("href"):
+                # Build URL for the work item as fallback
+                base_url = self.client_config.get("base_url", f"https://dev.azure.com/{self.organization}/{self.project}")
+                item_url = build_azure_devops_url(
+                    base_url, 
+                    str(work_item_id), 
+                    "workitems"
+                )
+                # Add the URL to the work item data
+                if "_links" not in work_item:
+                    work_item["_links"] = {}
+                if "html" not in work_item["_links"]:
+                    work_item["_links"]["html"] = {}
+                work_item["_links"]["html"]["href"] = item_url
+            
+            # Fetch comments if enabled
+            comments = []
+            if self.include_comments:
+                comments = self._get_work_item_comments(work_item_id)
+
+            # Create document from work item
+            document = self._process_work_item(work_item, comments)
+            
+            if document:
+                # Only cache if not force refresh
+                if not force_refresh:
+                    self._store_in_cache(work_item_id, document)
                 
-            # Process the work item into a document
-            document = self._process_work_item(work_item_details[0])
-            
-            # Log success
-            logger.info(f"Successfully fetched fresh context for work item {work_item_id}")
-            
-            return document
-            
+                logger.info(f"Successfully fetched context for work item {work_item_id}")
+                return document
+            else:
+                logger.warning(f"Failed to process work item {work_item_id} into Document")
+
         except Exception as e:
             logger.error(f"Failed to fetch fresh context for work item {work_item_id}: {str(e)}")
+            # Add additional error details
+            logger.error(f"Error details: {type(e).__name__} - {str(e)}")
             return None
-        
-    def fetch_additional_context(self, work_item_id: int) -> Optional[Document]:
-        """Fetch additional context with caching."""
-        # Check cache first
-        cached_doc = self._get_cached_context(work_item_id)
-        if cached_doc:
-            return cached_doc
-            
-        # Fetch fresh data if not in cache
-        document = self._fetch_fresh_context(work_item_id)
-        if document:
-            self._context_cache[work_item_id] = (document, datetime.now())
-        return document
+
+        return None
 
     def fetch_additional_context_batch(self, work_item_ids: List[int]) -> List[Document]:
-        """Fetch additional context for multiple work items in parallel."""
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(self.fetch_additional_context, work_item_id)
-                for work_item_id in work_item_ids
-            ]
-            return [f.result() for f in futures if f.result()]
+        """Fetch additional context for multiple work items in parallel.
+
+        Args:
+            work_item_ids: List of work item IDs to fetch context for.
+
+        Returns:
+            List of Document objects.
+        """
+        try:
+            # First check cache for all work items
+            documents = []
+            uncached_ids = []
+
+            for work_item_id in work_item_ids:
+                cached_doc = self._get_cached_context(work_item_id)
+                if cached_doc:
+                    documents.append(cached_doc)
+                else:
+                    uncached_ids.append(work_item_id)
+
+            if uncached_ids:
+                logger.info(f"Fetching fresh context for {len(uncached_ids)} work items")
+                # Fetch work item details
+                work_items = self._get_work_item_details(uncached_ids)
+                
+                # Create a mapping from work item ID to work item for easier lookup
+                work_item_map = {item.get("id"): item for item in work_items}
+                
+                # Ensure all work items have _links or fallback URLs
+                for work_item_id, work_item in work_item_map.items():
+                    if not work_item.get("_links", {}).get("html", {}).get("href"):
+                        # Build URL for the work item as fallback
+                        base_url = self.client_config.get("base_url", f"https://dev.azure.com/{self.organization}/{self.project}")
+                        item_url = build_azure_devops_url(
+                            base_url, 
+                            str(work_item_id), 
+                            "workitems"
+                        )
+                        # Add the URL to the work item data
+                        if "_links" not in work_item:
+                            work_item["_links"] = {}
+                        if "html" not in work_item["_links"]:
+                            work_item["_links"]["html"] = {}
+                        work_item["_links"]["html"]["href"] = item_url
+                
+                # Fetch comments in parallel if enabled
+                comments_map = {}
+                if self.include_comments:
+                    with ThreadPoolExecutor() as executor:
+                        comment_futures = {
+                            executor.submit(self._get_work_item_comments, wid): wid 
+                            for wid in uncached_ids
+                        }
+                        for future in comment_futures:
+                            work_item_id = comment_futures[future]
+                            try:
+                                comments_map[work_item_id] = future.result()
+                            except Exception as e:
+                                logger.error(f"Failed to fetch comments for work item {work_item_id}: {str(e)}")
+                                comments_map[work_item_id] = []
+
+                # Process work items
+                for work_item_id in uncached_ids:
+                    if work_item_id in work_item_map:
+                        work_item = work_item_map[work_item_id]
+                        comments = comments_map.get(work_item_id, []) if self.include_comments else None
+                        document = self._process_work_item(work_item, comments)
+                        
+                        if document:
+                            self._store_in_cache(work_item_id, document)
+                            documents.append(document)
+                        else:
+                            logger.warning(f"Failed to process work item {work_item_id} into Document")
+                    else:
+                        logger.warning(f"Work item {work_item_id} not found in API response")
+
+            logger.info(f"Returned {len(documents)} documents from fetch_additional_context_batch")
+            return documents
+
+        except Exception as e:
+            logger.error(f"Failed to fetch fresh context for work items {work_item_ids}: {str(e)}")
+            # Add additional error details for better debugging
+            logger.error(f"Error details: {type(e).__name__} - {str(e)}")
+            return []

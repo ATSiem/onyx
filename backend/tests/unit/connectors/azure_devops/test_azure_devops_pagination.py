@@ -280,14 +280,14 @@ class TestAzureDevOpsConnectorPagination:
             "base_url": "https://dev.azure.com/testorg/testproject/",
             "api_version": "7.0"
         }
-        
+
         # Create a list of 300 work item IDs (exceeds the 200 item batch limit)
         work_item_ids = list(range(1, 301))
-        
+
         # For each batch of 200 work items, create a response
         first_batch = work_item_ids[:200]
         second_batch = work_item_ids[200:]
-        
+
         # Create the test responses
         wiql_response = MagicMock()
         wiql_response.json.return_value = {
@@ -295,7 +295,7 @@ class TestAzureDevOpsConnectorPagination:
             "continuationToken": None
         }
         wiql_response.raise_for_status.return_value = None
-        
+
         first_batch_response = MagicMock()
         first_batch_response.json.return_value = {
             "value": [
@@ -312,7 +312,7 @@ class TestAzureDevOpsConnectorPagination:
             ]
         }
         first_batch_response.raise_for_status.return_value = None
-        
+
         second_batch_response = MagicMock()
         second_batch_response.json.return_value = {
             "value": [
@@ -329,7 +329,7 @@ class TestAzureDevOpsConnectorPagination:
             ]
         }
         second_batch_response.raise_for_status.return_value = None
-        
+
         with patch.object(connector, '_make_api_request') as mock_request:
             # Set up mock to return our pre-defined responses
             mock_request.side_effect = [
@@ -337,25 +337,33 @@ class TestAzureDevOpsConnectorPagination:
                 first_batch_response,
                 second_batch_response
             ]
-            
+
             # Patch the _get_work_item_comments method to return empty list to simplify test
             with patch.object(connector, '_get_work_item_comments', return_value=[]):
                 # Create a checkpoint and call load_from_checkpoint
                 checkpoint = AzureDevOpsConnectorCheckpoint(has_more=True, continuation_token=None)
                 start_time = int(datetime(2023, 1, 1).timestamp())
                 end_time = int(datetime(2023, 1, 31).timestamp())
-                
+
                 # Collect documents from the connector
                 documents = list(connector.load_from_checkpoint(start_time, end_time, checkpoint))
                 
                 # Should have 300 documents (one for each work item)
                 assert len(documents) == 300
-                
+
                 # Check that we made 3 API calls:
                 # 1. The WIQL query
                 # 2-3. Two batches of work item details (at most 200 items each)
                 assert mock_request.call_count == 3
-                
+
                 # Verify that IDs in documents match our work_item_ids
-                doc_ids = sorted([int(d.title.split()[1].rstrip(':')) for d in documents])
-                assert doc_ids == work_item_ids 
+                # Extract work_item_id from the semantic_identifier instead of title
+                doc_ids = []
+                for doc in documents:
+                    semantic_id = doc.semantic_identifier
+                    # Extract ID from format like "Bug 123: Test Item 123 [Not Resolved]"
+                    id_part = semantic_id.split(':', 1)[0].split(' ')[1]
+                    doc_ids.append(int(id_part))
+                
+                # Sort and compare IDs
+                assert sorted(doc_ids) == sorted(work_item_ids) 
