@@ -26,6 +26,7 @@ class TestAzureDevOpsConnectorPagination:
             "base_url": "https://dev.azure.com/testorg/testproject/",
             "api_version": "7.0"
         }
+        connector.personal_access_token = "test_token"  # Set test token to avoid credential errors
 
         # Mock the API response for WIQL query
         with patch.object(connector, '_make_api_request') as mock_request:
@@ -207,7 +208,8 @@ class TestAzureDevOpsConnectorPagination:
             "base_url": "https://dev.azure.com/testorg/testproject/",
             "api_version": "7.0"
         }
-        
+        connector.personal_access_token = "test_token"  # Set test token to avoid credential errors
+
         # Create an empty response
         empty_response = MagicMock()
         empty_response.json.return_value = {
@@ -248,7 +250,8 @@ class TestAzureDevOpsConnectorPagination:
             "base_url": "https://dev.azure.com/testorg/testproject/",
             "api_version": "7.0"
         }
-        
+        connector.personal_access_token = "test_token"  # Set test token to avoid credential errors
+
         with patch.object(connector, '_make_api_request') as mock_request:
             # Set up mock to raise a network error
             mock_request.side_effect = requests.exceptions.ConnectionError("Network error")
@@ -280,6 +283,7 @@ class TestAzureDevOpsConnectorPagination:
             "base_url": "https://dev.azure.com/testorg/testproject/",
             "api_version": "7.0"
         }
+        connector.personal_access_token = "test_token"  # Set test token to avoid credential errors
 
         # Create a list of 300 work item IDs (exceeds the 200 item batch limit)
         work_item_ids = list(range(1, 301))

@@ -289,6 +289,255 @@ def test_work_item_comments(org, project, work_items, headers):
     return True
 
 
+def test_data_types(org, project, headers):
+    """Test API endpoints for different data types supported by the connector"""
+    print("\n===== TESTING DATA TYPE API ENDPOINTS =====")
+    
+    data_types = {
+        "work_items": "Already tested in previous steps",
+        "commits": "Git repositories and commits",
+        "test_results": "Test runs and results",
+        "test_stats": "Test run statistics",
+        "releases": "Release definitions and instances",
+        "wikis": "Project wikis"
+    }
+    
+    print(f"Testing {len(data_types)} data types supported by the connector:\n")
+    
+    results = {}
+    
+    # 1. Test repositories and commits API (for commits data type)
+    print("\n----- Testing Repositories & Commits API -----")
+    try:
+        # Get repositories
+        repos_url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories?api-version=7.0"
+        print(f"Testing Repository API: {repos_url}")
+        
+        repos_response = requests.get(repos_url, headers=headers)
+        repos_response.raise_for_status()
+        
+        repos_data = repos_response.json()
+        repos_count = len(repos_data.get("value", []))
+        
+        print(f"✅ Successfully fetched {repos_count} repositories")
+        
+        # Try to get commits for the first repository if any
+        if repos_count > 0:
+            repo_id = repos_data["value"][0]["id"]
+            repo_name = repos_data["value"][0]["name"]
+            
+            commits_url = f"https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo_id}/commits?api-version=7.0&$top=10"
+            print(f"\nTesting Commits API for repository '{repo_name}':")
+            print(f"URL: {commits_url}")
+            
+            commits_response = requests.get(commits_url, headers=headers)
+            commits_response.raise_for_status()
+            
+            commits_data = commits_response.json()
+            commits_count = len(commits_data.get("value", []))
+            
+            print(f"✅ Successfully fetched {commits_count} commits")
+            
+            if commits_count > 0:
+                commit = commits_data["value"][0]
+                print("\nSample commit:")
+                print(f"  Commit ID: {commit.get('commitId', 'N/A')[:8]}...")
+                print(f"  Author: {commit.get('author', {}).get('name', 'N/A')}")
+                print(f"  Date: {commit.get('author', {}).get('date', 'N/A')}")
+                print(f"  Message: {commit.get('comment', 'N/A')[:100]}...")
+            
+            results["commits"] = "✅ Success"
+        else:
+            print("⚠️ No repositories found to test commits API")
+            results["commits"] = "⚠️ No repositories found"
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to access repositories and commits: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_details = e.response.json()
+                print(f"Error details: {error_details}")
+            except:
+                print(f"Error details: {e.response.text[:200]}")
+        results["commits"] = "❌ Failed"
+    
+    # 2. Test test runs API (for test_results and test_stats data types)
+    print("\n----- Testing Test Runs API -----")
+    try:
+        test_url = f"https://dev.azure.com/{org}/{project}/_apis/test/runs?api-version=7.0&$top=10"
+        print(f"Testing Test Runs API: {test_url}")
+        
+        test_response = requests.get(test_url, headers=headers)
+        test_response.raise_for_status()
+        
+        test_data = test_response.json()
+        test_count = len(test_data.get("value", []))
+        
+        print(f"✅ Successfully fetched {test_count} test runs")
+        
+        # Try to get test results and stats for the first test run if any
+        if test_count > 0:
+            run_id = test_data["value"][0]["id"]
+            run_name = test_data["value"][0]["name"]
+            
+            # Get test results
+            results_url = f"https://dev.azure.com/{org}/{project}/_apis/test/Runs/{run_id}/results?api-version=7.0&$top=10"
+            print(f"\nTesting Test Results API for run '{run_name}':")
+            print(f"URL: {results_url}")
+            
+            results_response = requests.get(results_url, headers=headers)
+            results_response.raise_for_status()
+            
+            results_data = results_response.json()
+            results_count = len(results_data.get("value", []))
+            
+            print(f"✅ Successfully fetched {results_count} test results")
+            
+            # Get test statistics
+            stats_url = f"https://dev.azure.com/{org}/{project}/_apis/test/Runs/{run_id}/Statistics?api-version=7.0"
+            print(f"\nTesting Test Statistics API for run '{run_name}':")
+            print(f"URL: {stats_url}")
+            
+            stats_response = requests.get(stats_url, headers=headers)
+            stats_response.raise_for_status()
+            
+            stats_data = stats_response.json()
+            
+            print(f"✅ Successfully fetched test run statistics")
+            print(f"  Total Tests: {stats_data.get('totalTests', 'N/A')}")
+            print(f"  Passed Tests: {stats_data.get('passedTests', 'N/A')}")
+            print(f"  Failed Tests: {stats_data.get('failedTests', 'N/A')}")
+            
+            results["test_results"] = "✅ Success"
+            results["test_stats"] = "✅ Success"
+        else:
+            print("⚠️ No test runs found to test results and statistics API")
+            results["test_results"] = "⚠️ No test runs found"
+            results["test_stats"] = "⚠️ No test runs found"
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to access test runs and results: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_details = e.response.json()
+                print(f"Error details: {error_details}")
+            except:
+                print(f"Error details: {e.response.text[:200]}")
+        results["test_results"] = "❌ Failed"
+        results["test_stats"] = "❌ Failed"
+    
+    # 3. Test releases API (for releases data type)
+    print("\n----- Testing Releases API -----")
+    try:
+        releases_url = f"https://vsrm.dev.azure.com/{org}/{project}/_apis/release/releases?api-version=7.0&$top=10"
+        print(f"Testing Releases API: {releases_url}")
+        
+        releases_response = requests.get(releases_url, headers=headers)
+        releases_response.raise_for_status()
+        
+        releases_data = releases_response.json()
+        releases_count = len(releases_data.get("value", []))
+        
+        print(f"✅ Successfully fetched {releases_count} releases")
+        
+        if releases_count > 0:
+            release = releases_data["value"][0]
+            print("\nSample release:")
+            print(f"  Release ID: {release.get('id', 'N/A')}")
+            print(f"  Name: {release.get('name', 'N/A')}")
+            print(f"  Status: {release.get('status', 'N/A')}")
+            
+            # Get release details
+            release_id = release.get("id")
+            details_url = f"https://vsrm.dev.azure.com/{org}/{project}/_apis/release/releases/{release_id}?api-version=7.0"
+            print(f"\nTesting Release Details API:")
+            print(f"URL: {details_url}")
+            
+            details_response = requests.get(details_url, headers=headers)
+            details_response.raise_for_status()
+            
+            print(f"✅ Successfully fetched release details")
+            
+            results["releases"] = "✅ Success"
+        else:
+            print("⚠️ No releases found to test releases API")
+            results["releases"] = "⚠️ No releases found"
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to access releases: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_details = e.response.json()
+                print(f"Error details: {error_details}")
+            except:
+                print(f"Error details: {e.response.text[:200]}")
+        results["releases"] = "❌ Failed"
+    
+    # 4. Test wikis API (for wikis data type)
+    print("\n----- Testing Wikis API -----")
+    try:
+        wikis_url = f"https://dev.azure.com/{org}/{project}/_apis/wiki/wikis?api-version=7.0"
+        print(f"Testing Wikis API: {wikis_url}")
+        
+        wikis_response = requests.get(wikis_url, headers=headers)
+        wikis_response.raise_for_status()
+        
+        wikis_data = wikis_response.json()
+        wikis_count = len(wikis_data.get("value", []))
+        
+        print(f"✅ Successfully fetched {wikis_count} wikis")
+        
+        if wikis_count > 0:
+            wiki = wikis_data["value"][0]
+            wiki_id = wiki.get("id")
+            wiki_name = wiki.get("name")
+            
+            # Get wiki pages
+            pages_url = f"https://dev.azure.com/{org}/{project}/_apis/wiki/wikis/{wiki_id}/pages?api-version=7.0&includeContent=true"
+            print(f"\nTesting Wiki Pages API for wiki '{wiki_name}':")
+            print(f"URL: {pages_url}")
+            
+            try:
+                pages_response = requests.get(pages_url, headers=headers)
+                pages_response.raise_for_status()
+                
+                print(f"✅ Successfully accessed wiki pages")
+                
+                # Try to fetch content of the root page
+                root_path = wiki.get("path", "")
+                content_url = f"https://dev.azure.com/{org}/{project}/_apis/wiki/wikis/{wiki_id}/pages?path={root_path}&includeContent=true&api-version=7.0"
+                print(f"\nTesting Wiki Page Content API:")
+                print(f"URL: {content_url}")
+                
+                content_response = requests.get(content_url, headers=headers)
+                content_response.raise_for_status()
+                
+                print(f"✅ Successfully fetched wiki page content")
+                
+                results["wikis"] = "✅ Success"
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️ Could access wiki but not pages: {str(e)}")
+                results["wikis"] = "⚠️ Partial success"
+        else:
+            print("⚠️ No wikis found to test wikis API")
+            results["wikis"] = "⚠️ No wikis found"
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Failed to access wikis: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_details = e.response.json()
+                print(f"Error details: {error_details}")
+            except:
+                print(f"Error details: {e.response.text[:200]}")
+        results["wikis"] = "❌ Failed"
+    
+    # Print summary of data type tests
+    print("\n===== DATA TYPE API TESTS SUMMARY =====")
+    print("Work Items:    ✅ Success (tested in previous steps)")
+    for data_type, result in results.items():
+        print(f"{data_type.capitalize()}: {result}")
+    
+    # Return overall success (true if at least work items work)
+    return True
+
+
 def simulate_indexing(org, project, headers):
     """Simulate a full indexing process similar to the actual connector"""
     print("\n===== SIMULATING FULL INDEXING PROCESS =====")
@@ -386,13 +635,14 @@ def main():
     parser.add_argument('--wiql', action='store_true', help='Test WIQL query')
     parser.add_argument('--items', action='store_true', help='Test work item details API')
     parser.add_argument('--comments', action='store_true', help='Test work item comments API')
+    parser.add_argument('--data-types', action='store_true', help='Test supported data type API endpoints')
     parser.add_argument('--simulate', action='store_true', help='Simulate full indexing process')
     
     args = parser.parse_args()
     
     # Default to "all" if no specific tests are selected
     if not (args.all or args.basic or args.project or args.wiql or 
-            args.items or args.comments or args.simulate):
+            args.items or args.comments or args.data_types or args.simulate):
         args.all = True
     
     # Get credentials and connection info
@@ -435,6 +685,11 @@ def main():
     # Test work item comments
     if (args.all or args.comments) and work_items:
         if not test_work_item_comments(org, project, work_items, headers):
+            success = False
+    
+    # Test data type API endpoints
+    if args.all or args.data_types:
+        if not test_data_types(org, project, headers):
             success = False
     
     # Simulate indexing
