@@ -55,6 +55,18 @@ class CheckpointOutputWrapper(Generic[CT]):
                 yield document_or_failure, None, None
             elif isinstance(document_or_failure, ConnectorFailure):
                 yield None, document_or_failure, None
+            elif isinstance(document_or_failure, tuple):
+                # Some connectors are incorrectly yielding tuples instead of proper objects
+                # Log detailed information to help diagnose which connector is causing this
+                logger.error(
+                    f"Connector yielded a tuple {document_or_failure} instead of Document or ConnectorFailure. "
+                    f"Tuple length: {len(document_or_failure)}, contents: {document_or_failure!r}"
+                )
+                raise ValueError(
+                    f"Invalid document_or_failure type: {type(document_or_failure)}. "
+                    f"Connector yielded a tuple {document_or_failure!r} which is not expected. "
+                    f"Check the connector implementation to ensure it's yielding Document or ConnectorFailure objects."
+                )
             else:
                 raise ValueError(
                     f"Invalid document_or_failure type: {type(document_or_failure)}"
