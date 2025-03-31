@@ -1,4 +1,5 @@
 .env
+.env.local
 .DS_store
 .venv
 .mypy_cache
