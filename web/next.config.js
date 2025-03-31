@@ -9,7 +9,8 @@ const { withSentryConfig } = require("@sentry/nextjs");
 
 const cspHeader = `
     style-src 'self' 'unsafe-inline';
-    font-src 'self';
+    font-src 'self' data: https://*.posthog.com;
+    connect-src 'self' https://*.posthog.com https://us.i.posthog.com;
     object-src 'none';
     base-uri 'self';
     form-action 'self';
