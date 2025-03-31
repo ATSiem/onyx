@@ -232,6 +232,10 @@ export interface HighspotCredentialJson {
   highspot_secret: string;
 }
 
+export interface AzureDevOpsCredentialJson {
+  personal_access_token: string;
+}
+
 export const credentialTemplates: Record<ValidSources, any> = {
   github: { github_access_token: "" } as GithubCredentialJson,
   gitlab: {
@@ -364,6 +368,7 @@ export const credentialTemplates: Record<ValidSources, any> = {
     highspot_key: "",
     highspot_secret: "",
   } as HighspotCredentialJson,
+  azure_devops: { personal_access_token: "" } as AzureDevOpsCredentialJson,
 };
 
 export const credentialDisplayNames: Record<string, string> = {

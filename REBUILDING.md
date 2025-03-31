@@ -20,11 +20,19 @@ Both environments use a local Unstructured API:
 > **Note**: Both development and production environments are configured to use `http://host.docker.internal:8000` as the Unstructured API URL in their respective docker-compose files. This is set via the `UNSTRUCTURED_API_URL` environment variable in both `api_server` and `background` services.
 
 ```bash
+# Option 1: Use the helper script to automatically setup the Unstructured API
+# This will check if Docker is running, and if the container is running and start it if needed
+./scripts/ensure_unstructured_api.sh
+
+# Option 2: Manual setup
 # Download image
 docker pull --platform linux/amd64 downloads.unstructured.io/unstructured-io/unstructured-api:latest
 
-# Run locally
-docker run --platform linux/amd64 -p 8000:8000 -d --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
+# Run locally (no -d flag for interactive mode)
+docker run --platform linux/amd64 -p 8000:8000 --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
+
+# Alternatively, run in background with -d flag
+# docker run --platform linux/amd64 -p 8000:8000 -d --name unstructured-api downloads.unstructured.io/unstructured-io/unstructured-api:latest
 
 # Generate and set up API key
 docker exec -it unstructured-api bash
@@ -201,6 +209,22 @@ For email invites to work properly, ensure `MULTI_TENANT=true` is set in your `.
 
 ### Testing
 
+#### Pre-Merge and Azure DevOps Tests
+Before rebuilding the development environment, run the pre-merge check script which includes:
+1. Backend regression tests
+2. Email invite tests
+3. Zulip schema compatibility tests
+4. Unstructured API integration checks
+5. Unstructured API health check
+6. Azure DevOps connector tests (40 tests)
+
+```bash
+# Run all pre-merge checks and Azure DevOps tests
+./scripts/pre-merge-check.sh
+```
+
+The pre-merge check script will run all necessary tests in sequence. If any test fails, the script will stop and report the error.
+
 #### Frontend Testing
 The Onyx codebase uses Jest for frontend testing with the following setup:
 
@@ -224,11 +248,39 @@ Frontend tests use:
 
 The Jest configuration is in `web/jest.config.js` and Babel configuration in `web/babel.config.js`.
 
-#### Test Structure
-- **Unit Tests**: Focus on testing individual functions/components in isolation
-- **Regression Tests**: Ensure that fixed bugs don't reappear 
-- **Integration Tests**: Test interactions between components
-- **E2E Tests**: Use Playwright for end-to-end testing (in `web/tests/e2e/`)
+> **Note**: E2E tests using Playwright are not currently set up in this fork.
+
+#### Backend Testing
+The backend uses pytest for testing with the following structure:
+
+```bash
+# Run all backend tests
+cd backend
+python -m pytest
+
+# Run specific test file
+python -m pytest tests/unit/connectors/azure_devops/test_azure_devops_connector.py -v
+
+# Run all Azure DevOps connector tests (40 tests)
+python -m pytest tests/unit/connectors/azure_devops/test_*.py -v
+```
+
+Backend test categories:
+- **Unit Tests**: Individual function/class testing
+- **Integration Tests**: Component interaction testing
+- **Regression Tests**: Bug fix verification
+- **Connector Tests**: Specific tests for data connectors (e.g., Azure DevOps)
+
+#### Azure DevOps Connector Tests
+The Azure DevOps connector has 40 tests across multiple files:
+- `test_azure_devops_connector.py`: Core connector functionality
+- `test_azure_devops_credential_flow.py`: Authentication
+- `test_azure_devops_document.py`: Document processing
+- `test_azure_devops_independent.py`: Utility functions
+- `test_azure_devops_pagination.py`: Pagination and batching
+- `test_azure_devops_regression.py`: Bug fixes
+- `test_azure_devops_resolution_status.py`: Resolution status handling
+- `test_azure_devops_utils.py`: Helper functions
 
 #### Fork-Specific Regression Tests
 This fork contains specific regression tests to verify our custom fixes are maintained when merging from upstream:
@@ -237,6 +289,14 @@ This fork contains specific regression tests to verify our custom fixes are main
 # Run regression tests
 ./scripts/pre-merge-check.sh
 ```
+
+The pre-merge check script runs:
+1. Backend regression tests
+2. Email invite tests
+3. Zulip schema compatibility tests
+4. Unstructured API integration checks
+5. Unstructured API health check
+6. Azure DevOps connector tests
 
 See `REGRESSION_TESTS.md` for details on the regression tests and how they protect our custom functionality.
 

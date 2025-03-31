@@ -1290,6 +1290,88 @@ For example, specifying .*-support.* as a "channel" will cause the connector to 
     ],
     advanced_values: [],
   },
+  azure_devops: {
+    description: "Configure Azure DevOps connector",
+    values: [
+      {
+        type: "text",
+        query: "Enter your Azure DevOps organization name:",
+        label: "Organization",
+        name: "organization",
+        description: "Your Azure DevOps organization name.",
+        optional: false,
+      },
+      {
+        type: "text",
+        query: "Enter your Azure DevOps project name:",
+        label: "Project",
+        name: "project",
+        description: "Your Azure DevOps project name.",
+        optional: false,
+      },
+      {
+        type: "list",
+        query: "Select work item types to include:",
+        label: "Work Item Types",
+        name: "work_item_types",
+        description: "Types of work items to include (leave empty for all types).",
+        default: ["Bug", "Epic", "Feature", "Issue", "Task", "TestCase", "UserStory", "Impediment", "TestPlan", "TestSuite", "ChangeRequest", "Risk", "Milestone"],
+        optional: true,
+      },
+      {
+        type: "checkbox",
+        query: "Include work item comments?",
+        label: "Include Comments",
+        name: "include_comments",
+        description: "Whether to include work item comments.",
+        default: true,
+        optional: true,
+      },
+      {
+        type: "checkbox",
+        query: "Include work item attachments?",
+        label: "Include Attachments",
+        name: "include_attachments",
+        description: "Whether to include work item attachments (as links).",
+        default: false,
+        optional: true,
+      },
+      {
+        type: "tab",
+        name: "content_scope",
+        label: "What should we include from Azure DevOps?",
+        optional: true,
+        tabs: [
+          {
+            value: "work_items_only",
+            label: "Work Items Only",
+            fields: [
+              {
+                type: "string_tab",
+                label: "Work Items Only",
+                name: "work_items_only",
+                description: "This connector will only index work items from your Azure DevOps project.",
+              },
+            ],
+          },
+          {
+            value: "everything",
+            label: "Everything",
+            fields: [
+              {
+                type: "string_tab",
+                label: "Everything",
+                name: "everything",
+                description: "This connector will index work items, Git commits, test results, releases, and wikis from your Azure DevOps project.",
+              },
+            ],
+          },
+        ],
+        defaultTab: "work_items_only",
+      }
+    ],
+    advanced_values: [],
+  },
 };
 export function createConnectorInitialValues(
   connector: ConfigurableSources

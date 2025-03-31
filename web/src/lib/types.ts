@@ -391,6 +391,7 @@ export enum ValidSources {
   Airtable = "airtable",
   Gitbook = "gitbook",
   Highspot = "highspot",
+  AzureDevOps = "azure_devops",
 }
 
 export const validAutoSyncSources = [
