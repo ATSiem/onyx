@@ -137,6 +137,7 @@ import { useSidebarShortcut } from "@/lib/browserUtilities";
 import { ChatSearchModal } from "./chat_search/ChatSearchModal";
 import { ErrorBanner } from "./message/Resubmit";
 import MinimalMarkdown from "@/components/chat/MinimalMarkdown";
+import { AnalyticsEventType, trackChatMessageSent } from "@/lib/analytics";
 
 const TEMP_USER_MESSAGE_ID = -1;
 const TEMP_ASSISTANT_MESSAGE_ID = -2;
@@ -1403,6 +1404,14 @@ export function ChatPage({
             const user_message_id = messageResponseIDInfo.user_message_id!;
             const assistant_message_id =
               messageResponseIDInfo.reserved_assistant_message_id;
+
+            // Track the user message sent event
+            trackChatMessageSent(
+              currChatSessionId,
+              user_message_id,
+              true, // isUserMessage
+              currentMessageFiles.length > 0 // hasAttachments
+            );
 
             // we will use tempMessages until the regenerated message is complete
             messageUpdates = [

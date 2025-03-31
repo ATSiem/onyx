@@ -34,6 +34,7 @@ import { Settings } from "../admin/settings/interfaces";
 import { INTERNET_SEARCH_TOOL_ID } from "./tools/constants";
 import { SEARCH_TOOL_ID } from "./tools/constants";
 import { IIMAGE_GENERATION_TOOL_ID } from "./tools/constants";
+import { trackChatThreadCreated } from "@/lib/analytics";
 
 interface ChatRetentionInfo {
   chatRetentionDays: number;
@@ -123,7 +124,12 @@ export async function createChatSession(
     throw Error("Failed to create chat session");
   }
   const chatSessionResponseJson = await createChatSessionResponse.json();
-  return chatSessionResponseJson.chat_session_id;
+  const chatSessionId = chatSessionResponseJson.chat_session_id;
+  
+  // Import and track the chat thread created event
+  trackChatThreadCreated(chatSessionId, personaId, description);
+  
+  return chatSessionId;
 }
 
 export const isPacketType = (data: any): data is PacketType => {
