@@ -1311,11 +1311,11 @@ For example, specifying .*-support.* as a "channel" will cause the connector to 
       },
       {
         type: "list",
-        query: "Enter work item types to include:",
+        query: "Select work item types to include:",
         label: "Work Item Types",
         name: "work_item_types",
-        description: "Types of work items to index (leave empty for all types).",
-        default: ["Bug", "Epic", "Feature", "Issue", "Task", "UserStory"],
+        description: "Types of work items to include (leave empty for all types).",
+        default: ["Bug", "Epic", "Feature", "Issue", "Task", "TestCase", "UserStory", "Impediment", "TestPlan", "TestSuite", "ChangeRequest", "Risk", "Milestone"],
         optional: true,
       },
       {
@@ -1336,6 +1336,39 @@ For example, specifying .*-support.* as a "channel" will cause the connector to 
         default: false,
         optional: true,
       },
+      {
+        type: "tab",
+        name: "content_scope",
+        label: "What should we include from Azure DevOps?",
+        optional: true,
+        tabs: [
+          {
+            value: "work_items_only",
+            label: "Work Items Only",
+            fields: [
+              {
+                type: "string_tab",
+                label: "Work Items Only",
+                name: "work_items_only",
+                description: "This connector will only index work items from your Azure DevOps project.",
+              },
+            ],
+          },
+          {
+            value: "everything",
+            label: "Everything",
+            fields: [
+              {
+                type: "string_tab",
+                label: "Everything",
+                name: "everything",
+                description: "This connector will index work items, Git commits, test results, releases, and wikis from your Azure DevOps project.",
+              },
+            ],
+          },
+        ],
+        defaultTab: "work_items_only",
+      }
     ],
     advanced_values: [],
   },
