@@ -1362,6 +1362,26 @@ For example, specifying .*-support.* as a "channel" will cause the connector to 
         default: false,
         optional: true,
       },
+      {
+        type: "select",
+        query: "What should we include from Azure DevOps?",
+        label: "Content Scope",
+        name: "content_scope",
+        description: "Select what types of content to index from your Azure DevOps project.",
+        options: [
+          { 
+            name: "Work Items Only", 
+            value: "work_items_only",
+            description: "Only index work items from your Azure DevOps project." 
+          },
+          { 
+            name: "Everything", 
+            value: "everything",
+            description: "Index work items, Git commits, test results, releases, and wikis from your Azure DevOps project." 
+          }
+        ],
+        default: "work_items_only"
+      }
     ],
     credentials: [
       {
