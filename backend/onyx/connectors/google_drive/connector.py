@@ -2,11 +2,11 @@ import copy
 import threading
 from collections.abc import Callable
 from collections.abc import Iterator
-from concurrent.futures import as_completed
-from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from enum import Enum
 from functools import partial
 from typing import Any
+from typing import cast
 from typing import Protocol
 from urllib.parse import urlparse
 
@@ -28,7 +28,9 @@ from onyx.connectors.google_drive.doc_conversion import (
 )
 from onyx.connectors.google_drive.file_retrieval import crawl_folders_for_files
 from onyx.connectors.google_drive.file_retrieval import get_all_files_for_oauth
-from onyx.connectors.google_drive.file_retrieval import get_all_files_in_my_drive
+from onyx.connectors.google_drive.file_retrieval import (
+    get_all_files_in_my_drive_and_shared,
+)
 from onyx.connectors.google_drive.file_retrieval import get_files_in_shared_drive
 from onyx.connectors.google_drive.file_retrieval import get_root_folder_id
 from onyx.connectors.google_drive.models import DriveRetrievalStage
@@ -58,13 +60,13 @@ from onyx.connectors.interfaces import SlimConnector
 from onyx.connectors.models import ConnectorFailure
 from onyx.connectors.models import ConnectorMissingCredentialError
 from onyx.connectors.models import Document
-from onyx.connectors.models import DocumentFailure
 from onyx.connectors.models import EntityFailure
 from onyx.indexing.indexing_heartbeat import IndexingHeartbeatInterface
 from onyx.utils.lazy import lazy_eval
 from onyx.utils.logger import setup_logger
 from onyx.utils.retry_wrapper import retry_builder
 from onyx.utils.threadpool_concurrency import parallel_yield
+from onyx.utils.threadpool_concurrency import run_functions_tuples_in_parallel
 from onyx.utils.threadpool_concurrency import ThreadSafeDict
 
 logger = setup_logger()
@@ -86,13 +88,18 @@ def _extract_ids_from_urls(urls: list[str]) -> list[str]:
 
 def _convert_single_file(
     creds: Any,
-    primary_admin_email: str,
     allow_images: bool,
     size_threshold: int,
+    retriever_email: str,
     file: dict[str, Any],
 ) -> Document | ConnectorFailure | None:
-    user_email = file.get("owners", [{}])[0].get("emailAddress") or primary_admin_email
+    # We used to always get the user email from the file owners when available,
+    # but this was causing issues with shared folders where the owner was not included in the service account
+    # now we use the email of the account that successfully listed the file. Leaving this in case we end up
+    # wanting to retry with file owners and/or admin email at some point.
+    # user_email = file.get("owners", [{}])[0].get("emailAddress") or primary_admin_email
 
+    user_email = retriever_email
     # Only construct these services when needed
     user_drive_service = lazy_eval(
         lambda: get_drive_service(creds, user_email=user_email)
@@ -450,10 +457,11 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
                 logger.info(f"Getting all files in my drive as '{user_email}'")
 
                 yield from add_retrieval_info(
-                    get_all_files_in_my_drive(
+                    get_all_files_in_my_drive_and_shared(
                         service=drive_service,
                         update_traversed_ids_func=self._update_traversed_parent_ids,
                         is_slim=is_slim,
+                        include_shared_with_me=self.include_files_shared_with_me,
                         start=curr_stage.completed_until if resuming else start,
                         end=end,
                     ),
@@ -461,6 +469,7 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
                     DriveRetrievalStage.MY_DRIVE_FILES,
                 )
             curr_stage.stage = DriveRetrievalStage.SHARED_DRIVE_FILES
+            resuming = False  # we are starting the next stage for the first time
 
         if curr_stage.stage == DriveRetrievalStage.SHARED_DRIVE_FILES:
 
@@ -496,7 +505,7 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
                 )
                 yield from _yield_from_drive(drive_id, start)
             curr_stage.stage = DriveRetrievalStage.FOLDER_FILES
-
+            resuming = False  # we are starting the next stage for the first time
         if curr_stage.stage == DriveRetrievalStage.FOLDER_FILES:
 
             def _yield_from_folder_crawl(
@@ -549,6 +558,16 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
             checkpoint, is_slim, DriveRetrievalStage.MY_DRIVE_FILES
         )
 
+        # Setup initial completion map on first connector run
+        for email in all_org_emails:
+            # don't overwrite existing completion map on resuming runs
+            if email in checkpoint.completion_map:
+                continue
+            checkpoint.completion_map[email] = StageCompletion(
+                stage=DriveRetrievalStage.START,
+                completed_until=0,
+            )
+
         # we've found all users and drives, now time to actually start
         # fetching stuff
         logger.info(f"Found {len(all_org_emails)} users to impersonate")
@@ -562,11 +581,6 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
             drive_ids_to_retrieve, checkpoint
         )
 
-        for email in all_org_emails:
-            checkpoint.completion_map[email] = StageCompletion(
-                stage=DriveRetrievalStage.START,
-                completed_until=0,
-            )
         user_retrieval_gens = [
             self._impersonate_user_for_retrieval(
                 email,
@@ -797,10 +811,12 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
             return
 
         for file in drive_files:
-            if file.error is not None:
+            if file.error is None:
                 checkpoint.completion_map[file.user_email].update(
                     stage=file.completion_stage,
-                    completed_until=file.drive_file[GoogleFields.MODIFIED_TIME.value],
+                    completed_until=datetime.fromisoformat(
+                        file.drive_file[GoogleFields.MODIFIED_TIME.value]
+                    ).timestamp(),
                     completed_until_parent_id=file.parent_id,
                 )
             yield file
@@ -902,118 +918,86 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
         checkpoint: GoogleDriveCheckpoint,
         start: SecondsSinceUnixEpoch | None = None,
         end: SecondsSinceUnixEpoch | None = None,
-    ) -> Iterator[list[Document | ConnectorFailure]]:
+    ) -> Iterator[Document | ConnectorFailure]:
         try:
-            # Create a larger process pool for file conversion
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                # Prepare a partial function with the credentials and admin email
-                convert_func = partial(
-                    _convert_single_file,
-                    self.creds,
-                    self.primary_admin_email,
-                    self.allow_images,
-                    self.size_threshold,
+            # Prepare a partial function with the credentials and admin email
+            convert_func = partial(
+                _convert_single_file,
+                self.creds,
+                self.allow_images,
+                self.size_threshold,
+            )
+            # Fetch files in batches
+            batches_complete = 0
+            files_batch: list[RetrievedDriveFile] = []
+
+            def _yield_batch(
+                files_batch: list[RetrievedDriveFile],
+            ) -> Iterator[Document | ConnectorFailure]:
+                nonlocal batches_complete
+                # Process the batch using run_functions_tuples_in_parallel
+                func_with_args = [
+                    (
+                        convert_func,
+                        (
+                            file.user_email,
+                            file.drive_file,
+                        ),
+                    )
+                    for file in files_batch
+                ]
+                results = cast(
+                    list[Document | ConnectorFailure | None],
+                    run_functions_tuples_in_parallel(func_with_args, max_workers=8),
                 )
 
-                # Fetch files in batches
-                batches_complete = 0
-                files_batch: list[GoogleDriveFileType] = []
-                for retrieved_file in self._fetch_drive_items(
-                    is_slim=False,
-                    checkpoint=checkpoint,
-                    start=start,
-                    end=end,
-                ):
-                    if retrieved_file.error is not None:
-                        failure_stage = retrieved_file.completion_stage.value
-                        failure_message = (
-                            f"retrieval failure during stage: {failure_stage},"
-                        )
-                        failure_message += f"user: {retrieved_file.user_email},"
-                        failure_message += (
-                            f"parent drive/folder: {retrieved_file.parent_id},"
-                        )
-                        failure_message += f"error: {retrieved_file.error}"
-                        logger.error(failure_message)
-                        yield [
-                            ConnectorFailure(
-                                failed_entity=EntityFailure(
-                                    entity_id=failure_stage,
-                                ),
-                                failure_message=failure_message,
-                                exception=retrieved_file.error,
-                            )
-                        ]
-                        continue
-                    files_batch.append(retrieved_file.drive_file)
+                docs_and_failures = [result for result in results if result is not None]
 
-                    if len(files_batch) < self.batch_size:
-                        continue
+                if docs_and_failures:
+                    yield from docs_and_failures
+                    batches_complete += 1
 
-                    # Process the batch
-                    futures = [
-                        executor.submit(convert_func, file) for file in files_batch
-                    ]
-                    documents = []
-                    for future in as_completed(futures):
-                        try:
-                            doc = future.result()
-                            if doc is not None:
-                                documents.append(doc)
-                        except Exception as e:
-                            error_str = f"Error converting file: {e}"
-                            logger.error(error_str)
-                            yield [
-                                ConnectorFailure(
-                                    failed_document=DocumentFailure(
-                                        document_id=retrieved_file.drive_file["id"],
-                                        document_link=retrieved_file.drive_file[
-                                            "webViewLink"
-                                        ],
-                                    ),
-                                    failure_message=error_str,
-                                    exception=e,
-                                )
-                            ]
+            for retrieved_file in self._fetch_drive_items(
+                is_slim=False,
+                checkpoint=checkpoint,
+                start=start,
+                end=end,
+            ):
+                if retrieved_file.error is not None:
+                    failure_stage = retrieved_file.completion_stage.value
+                    failure_message = (
+                        f"retrieval failure during stage: {failure_stage},"
+                    )
+                    failure_message += f"user: {retrieved_file.user_email},"
+                    failure_message += (
+                        f"parent drive/folder: {retrieved_file.parent_id},"
+                    )
+                    failure_message += f"error: {retrieved_file.error}"
+                    logger.error(failure_message)
+                    yield ConnectorFailure(
+                        failed_entity=EntityFailure(
+                            entity_id=failure_stage,
+                        ),
+                        failure_message=failure_message,
+                        exception=retrieved_file.error,
+                    )
 
-                    if documents:
-                        yield documents
-                        batches_complete += 1
-                    files_batch = []
+                    continue
+                files_batch.append(retrieved_file)
 
-                    if batches_complete > BATCHES_PER_CHECKPOINT:
-                        checkpoint.retrieved_folder_and_drive_ids = self._retrieved_ids
-                        return  # create a new checkpoint
+                if len(files_batch) < self.batch_size:
+                    continue
 
-                # Process any remaining files
-                if files_batch:
-                    futures = [
-                        executor.submit(convert_func, file) for file in files_batch
-                    ]
-                    documents = []
-                    for future in as_completed(futures):
-                        try:
-                            doc = future.result()
-                            if doc is not None:
-                                documents.append(doc)
-                        except Exception as e:
-                            error_str = f"Error converting file: {e}"
-                            logger.error(error_str)
-                            yield [
-                                ConnectorFailure(
-                                    failed_document=DocumentFailure(
-                                        document_id=retrieved_file.drive_file["id"],
-                                        document_link=retrieved_file.drive_file[
-                                            "webViewLink"
-                                        ],
-                                    ),
-                                    failure_message=error_str,
-                                    exception=e,
-                                )
-                            ]
+                yield from _yield_batch(files_batch)
+                files_batch = []
 
-                    if documents:
-                        yield documents
+                if batches_complete > BATCHES_PER_CHECKPOINT:
+                    checkpoint.retrieved_folder_and_drive_ids = self._retrieved_ids
+                    return  # create a new checkpoint
+
+            # Process any remaining files
+            if files_batch:
+                yield from _yield_batch(files_batch)
         except Exception as e:
             logger.exception(f"Error extracting documents from Google Drive: {e}")
             raise e
@@ -1035,10 +1019,7 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
         checkpoint = copy.deepcopy(checkpoint)
         self._retrieved_ids = checkpoint.retrieved_folder_and_drive_ids
         try:
-            for doc_list in self._extract_docs_from_google_drive(
-                checkpoint, start, end
-            ):
-                yield from doc_list
+            yield from self._extract_docs_from_google_drive(checkpoint, start, end)
         except Exception as e:
             if MISSING_SCOPES_ERROR_STR in str(e):
                 raise PermissionError(ONYX_SCOPE_INSTRUCTIONS) from e
@@ -1073,9 +1054,7 @@ class GoogleDriveConnector(SlimConnector, CheckpointConnector[GoogleDriveCheckpo
                         raise RuntimeError(
                             "_extract_slim_docs_from_google_drive: Stop signal detected"
                         )
-
                     callback.progress("_extract_slim_docs_from_google_drive", 1)
-
         yield slim_batch
 
     def retrieve_all_slim_documents(

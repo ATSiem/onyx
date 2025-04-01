@@ -281,7 +281,7 @@ export default function AddConnector({
   return (
     <Formik
       initialValues={{
-        ...createConnectorInitialValues(connector),
+        ...createConnectorInitialValues(connector, currentCredential),
         ...Object.fromEntries(
           connectorConfigs[connector].advanced_values.map((field) => [
             field.name,
@@ -434,7 +434,7 @@ export default function AddConnector({
     >
       {(formikProps) => {
         return (
-          <div className="mx-auto mb-8 w-full">
+          <div className="mx-auto w-full">
             {popup}
 
             {uploading && (
