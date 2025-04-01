@@ -25,12 +25,14 @@ interface TabsFieldProps {
   currentCredential: Credential<any> | null;
 }
 
-const TabsField: FC<TabsFieldProps> = ({
+export const TabsField: FC<TabsFieldProps> = ({
   tabField,
   values,
   connector,
   currentCredential,
 }) => {
+  const { setFieldValue } = useFormikContext<any>();
+
   return (
     <div className="w-full">
       {tabField.label && (
@@ -51,7 +53,7 @@ const TabsField: FC<TabsFieldProps> = ({
       )}
 
       <Tabs
-        defaultValue={tabField.tabs[0].value}
+        defaultValue={tabField.defaultTab || tabField.tabs[0].value}
         className="w-full"
         onValueChange={(newTab) => {
           // Clear values from other tabs but preserve defaults
@@ -65,6 +67,9 @@ const TabsField: FC<TabsFieldProps> = ({
               });
             }
           });
+
+          // Set the tab field's value in the form data
+          setFieldValue(tabField.name, newTab);
         }}
       >
         <TabsList>

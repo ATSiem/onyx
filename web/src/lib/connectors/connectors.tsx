@@ -1337,37 +1337,24 @@ For example, specifying .*-support.* as a "channel" will cause the connector to 
         optional: true,
       },
       {
-        type: "tab",
+        type: "select",
+        query: "What should we include from Azure DevOps?",
+        label: "Content Scope",
         name: "content_scope",
-        label: "What should we include from Azure DevOps?",
-        optional: true,
-        tabs: [
-          {
+        description: "Select what types of content to index from your Azure DevOps project.",
+        options: [
+          { 
+            name: "Work Items Only", 
             value: "work_items_only",
-            label: "Work Items Only",
-            fields: [
-              {
-                type: "string_tab",
-                label: "Work Items Only",
-                name: "work_items_only",
-                description: "This connector will only index work items from your Azure DevOps project.",
-              },
-            ],
+            description: "Only index work items from your Azure DevOps project." 
           },
-          {
+          { 
+            name: "Everything", 
             value: "everything",
-            label: "Everything",
-            fields: [
-              {
-                type: "string_tab",
-                label: "Everything",
-                name: "everything",
-                description: "This connector will index work items, Git commits, test results, releases, and wikis from your Azure DevOps project.",
-              },
-            ],
-          },
+            description: "Index work items, Git commits, test results, releases, and wikis from your Azure DevOps project." 
+          }
         ],
-        defaultTab: "work_items_only",
+        default: "work_items_only"
       }
     ],
     advanced_values: [],

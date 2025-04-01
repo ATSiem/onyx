@@ -94,6 +94,7 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         include_attachments: bool = False,
         data_types: Optional[List[str]] = None,
         repositories: Optional[List[str]] = None,
+        content_scope: Optional[str] = None,
     ) -> None:
         """Initialize the Azure DevOps connector.
         
@@ -105,6 +106,7 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             include_attachments: Whether to include work item attachments (as links)
             data_types: Types of data to fetch (defaults to work items only)
             repositories: List of repository names to fetch commits from (defaults to all)
+            content_scope: UI selection for content scope (work_items_only or everything)
         """
         super().__init__()
         self.organization = organization
@@ -117,7 +119,33 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         self.personal_access_token: Optional[str] = None
         self._context_cache = {}
         self._cache_ttl = timedelta(minutes=5)
-        self.data_types = data_types or self.DEFAULT_DATA_TYPES
+        
+        # Handle content_scope from the UI - if "everything" is selected, 
+        # set data_types to include all available data types.
+        # This value comes from a select dropdown in the UI with two options:
+        # "work_items_only" and "everything"
+        if content_scope == "everything":
+            logger.info(f"Content scope is set to 'everything', setting all data types")
+            self.data_types = [
+                self.DATA_TYPE_WORK_ITEMS,
+                self.DATA_TYPE_COMMITS,
+                self.DATA_TYPE_TEST_RESULTS,
+                self.DATA_TYPE_TEST_STATS,
+                self.DATA_TYPE_RELEASES,
+                self.DATA_TYPE_RELEASE_DETAILS,
+                self.DATA_TYPE_WIKIS
+            ]
+        else:
+            # If data_types is explicitly provided, use it, otherwise default to work_items only
+            self.data_types = data_types or self.DEFAULT_DATA_TYPES
+            
+        # Store the content scope for logging purposes
+        self.content_scope = content_scope
+        
+        # Log the configuration for debugging
+        logger.info(f"Azure DevOps connector initialized with content_scope: {content_scope}")
+        logger.info(f"Data types: {self.data_types}")
+            
         self.repositories = repositories  # None means all repositories
         
         # Initialize repository cache
@@ -156,6 +184,10 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         """
         if not self.client_config:
             raise ConnectorValidationError("Azure DevOps client not configured")
+        
+        # Log connector configuration for debugging
+        logger.info(f"Validating Azure DevOps connector with content_scope: {getattr(self, 'content_scope', None)}")
+        logger.info(f"Data types to index: {self.data_types}")
         
         # Try to fetch project info as a simpler validation step
         try:
