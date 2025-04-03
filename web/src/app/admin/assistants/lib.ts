@@ -354,7 +354,7 @@ export const defaultPersona: Persona = {
   icon_color: "#FF6F6F",
   user_file_ids: [],
   user_folder_ids: [],
-  llm_model_provider_override: null,
-  llm_model_version_override: null,
-  num_chunks: null,
+  llm_model_provider_override: undefined,
+  llm_model_version_override: undefined,
+  num_chunks: undefined,
 };
