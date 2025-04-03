@@ -200,8 +200,6 @@ class FullPersonaSnapshot(PersonaSnapshot):
             prompts=[PromptSnapshot.from_model(prompt) for prompt in persona.prompts],
             llm_relevance_filter=persona.llm_relevance_filter,
             llm_filter_extraction=persona.llm_filter_extraction,
-            user_file_ids=[file.id for file in persona.user_files],
-            user_folder_ids=[folder.id for folder in persona.user_folders],
         )
 
 
