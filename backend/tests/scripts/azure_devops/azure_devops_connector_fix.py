@@ -13,6 +13,17 @@ from datetime import datetime, timezone, timedelta
 import argparse
 import re
 
+# Add the parent directory to sys.path to import modules
+script_dir = os.path.dirname(os.path.abspath(__file__))
+backend_dir = os.path.abspath(os.path.join(script_dir, "../../../"))
+sys.path.insert(0, backend_dir)
+
+try:
+    from onyx.connectors.azure_devops.connector import AzureDevOpsConnector
+except ImportError:
+    print("ERROR: Cannot import AzureDevOpsConnector. Make sure you're running this from the project root.")
+    sys.exit(1)
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
