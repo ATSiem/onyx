@@ -123,9 +123,38 @@ git push fork feature/upstream
 ### Deployment
 
 #### to Development Environment
+
+1. **Before rebuilding, ensure all tests pass and the Unstructured API is running:**
 ```bash
-# From repository root
+# Run regression tests
+./scripts/pre-merge-check.sh
+
+# Ensure Unstructured API is running
+./scripts/ensure_unstructured_api.sh
+```
+
+2. **Choose a rebuild approach:**
+
+```bash
+# Option 1: Standard rebuild (recommended for most cases)
 docker compose -f deployment/docker_compose/docker-compose.dev.yml -p onyx-stack up -d --build --force-recreate
+
+# Option 2: Complete clean rebuild (use when troubleshooting build issues)
+# Step 1: Build with no cache
+docker compose -f deployment/docker_compose/docker-compose.dev.yml -p onyx-stack build --no-cache
+# Step 2: Start containers
+docker compose -f deployment/docker_compose/docker-compose.dev.yml -p onyx-stack up -d --force-recreate
+```
+
+3. **Verify the rebuild:**
+```bash
+# Check container status
+docker compose -f deployment/docker_compose/docker-compose.dev.yml -p onyx-stack ps
+
+# Watch logs for any errors during startup
+docker compose -f deployment/docker_compose/docker-compose.dev.yml -p onyx-stack logs -f
+
+# Access the application
 open http://localhost:3000
 ```
 
@@ -141,7 +170,22 @@ git fetch fork
 git checkout main
 git pull fork main
 
+# Ensure Unstructured API is running
+./scripts/ensure_unstructured_api.sh
+
+# Create backup tag
+git tag -a backup-$(date +%Y%m%d-%H%M) -m "Pre-deployment backup"
+
+# Run pre-deployment tests
+./scripts/pre-merge-check.sh
+
+# Deploy to production
 docker compose -f deployment/docker_compose/docker-compose.prod.yml -p onyx-stack up -d --build --force-recreate
+
+# Verify deployment
+echo "Verifying deployment..."
+docker compose -f deployment/docker_compose/docker-compose.prod.yml -p onyx-stack ps
+curl http://localhost:8000/healthcheck
 ```
 Let's Encrypt will automatically handle SSL for knowledge.solutioncenter.ai
 
@@ -194,6 +238,15 @@ docker compose -f deployment/docker_compose/docker-compose.prod.yml -p onyx-stac
 
 # Force certificate renewal
 docker compose -f deployment/docker_compose/docker-compose.prod.yml -p onyx-stack exec certbot certbot renew --force-renewal
+```
+
+4. **Rebuild Failures or Lingering Issues**
+```bash
+# Deep clean (use when standard rebuilds fail)
+docker compose -f deployment/docker_compose/docker-compose.dev.yml -p onyx-stack down -v  # WARNING: This removes volumes!
+docker system prune -a  # WARNING: This removes all unused images!
+docker compose -f deployment/docker_compose/docker-compose.dev.yml -p onyx-stack build --no-cache
+docker compose -f deployment/docker_compose/docker-compose.dev.yml -p onyx-stack up -d
 ```
 
 ### Notes
