@@ -27,7 +27,11 @@ To use this connector, you'll need:
 3. Click "New Token"
 4. Give your token a name (e.g., "Onyx Integration")
 5. Set the organization to your organization
-6. For scopes, select "Custom defined" and ensure "Work Items (Read)" is checked
+6. For scopes, select "Custom defined" and ensure the following permissions:
+   - "Work Items (Read)" - Required for work items
+   - "Code (Read)" - Required if you want to index Git commits
+   - "Test Management (Read)" - Required if you want to index test results
+   - "Release (Read)" - Required if you want to index releases
 7. Set an expiration date (note: you'll need to update the token in Onyx when it expires)
 8. Click "Create"
 9. Copy the token value (you won't be able to see it again)
@@ -55,6 +59,8 @@ The setup is a two-step process:
    - **Work Item Types**: (Optional) Types of work items to index (e.g., Bug, UserStory, Task)
    - **Include Comments**: Toggle to include work item comments
    - **Include Attachments**: Toggle to include links to work item attachments
+   - **Content Scope**: Choose between "Work Items Only" (default) or "Everything". Select "Everything" if you want to index Git commits, test results, releases, and wikis in addition to work items. Note that selecting "Everything" requires additional PAT permissions as specified above.
+     - Note: The content_scope value is case-insensitive, so both "everything" and "Everything" will work.
 5. Click "Save" to add the connector
 
 ## How It Works
@@ -95,6 +101,13 @@ The connector uses the Azure DevOps REST API to:
    - You don't need to manually enter the Azure DevOps URL
    - The connector automatically builds the URL using your organization and project names
    - Just enter the organization name (the part after `https://dev.azure.com/`) and project name
+
+5. **Git Commits Not Appearing**:
+   - Ensure your PAT has "Code (Read)" permission
+   - Check that "Content Scope" is set to "Everything" in the connector configuration
+   - Verify your project actually has Git repositories with commits
+   - If using a repository filter, confirm the repository names are correct
+   - Note: If you're configuring via the API or scripts, the content_scope value is case-insensitive - both "everything" and "Everything" will work.
 
 ### Testing the Connection
 

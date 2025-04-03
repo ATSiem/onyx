@@ -1,5 +1,6 @@
 """Azure DevOps connector for Onyx"""
 import json
+import logging
 import time
 from collections.abc import Generator, Iterator
 from datetime import datetime, timezone, timedelta
@@ -124,8 +125,8 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         # set data_types to include all available data types.
         # This value comes from a select dropdown in the UI with two options:
         # "work_items_only" and "everything"
-        if content_scope == "everything":
-            logger.info(f"Content scope is set to 'everything', setting all data types")
+        if content_scope and content_scope.lower() == "everything":
+            logger.info(f"Content scope is set to '{content_scope}', setting all data types")
             self.data_types = [
                 self.DATA_TYPE_WORK_ITEMS,
                 self.DATA_TYPE_COMMITS,
@@ -967,6 +968,14 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         
         logger.info(f"Loading documents from {start_time.isoformat()} to {end_time.isoformat()}")
         logger.info(f"Checkpoint continuation token: {checkpoint.continuation_token}")
+        logger.info(f"Content scope: {getattr(self, 'content_scope', 'Not set')}")
+        logger.info(f"Configured data types: {self.data_types}")
+        
+        # Check if git commits are enabled
+        if self.DATA_TYPE_COMMITS in self.data_types:
+            logger.info("Git commits indexing is enabled")
+        else:
+            logger.warning("Git commits indexing is NOT enabled. If you want to index commits, set content_scope to 'everything' (or 'Everything') in the connector configuration.")
         
         # Make sure we have credentials
         if not self.personal_access_token:
@@ -1677,16 +1686,39 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         """
         # Check cache first
         if self._repository_cache:
+            logger.debug("Using cached repositories")
             return list(self._repository_cache.values())
+        
+        logger.info(f"Fetching Git repositories for organization: {self.organization}, project: {self.project}")
         
         try:
             response = self._make_api_request(
                 "_apis/git/repositories",
                 params={"includeLinks": "true"}
             )
+            
+            # Log the response status
+            status_code = response.status_code
+            logger.debug(f"Repository API response status code: {status_code}")
+            
+            if status_code != 200:
+                logger.warning(f"Non-200 response from repository API: {status_code}")
+                # Try to extract error message if possible
+                try:
+                    error_msg = response.json()
+                    logger.warning(f"API Error response: {error_msg}")
+                except Exception:
+                    logger.warning(f"Raw error response: {response.text[:200]}")
+            
             response.raise_for_status()
             
             repositories = response.json().get("value", [])
+            
+            # Log repository info for debugging
+            for repo in repositories:
+                repo_name = repo.get("name", "unnamed")
+                repo_id = repo.get("id", "no-id")
+                logger.debug(f"Found repository: {repo_name} (ID: {repo_id})")
             
             # Filter repositories if specific ones were requested
             if self.repositories:
@@ -1695,15 +1727,38 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                     if repo.get("name") in self.repositories:
                         filtered_repositories.append(repo)
                 repositories = filtered_repositories
+                logger.info(f"Filtered to {len(repositories)} repositories based on configuration")
             
             # Cache the repositories by ID for later use
             for repo in repositories:
                 self._repository_cache[repo.get("id")] = repo
             
-            logger.info(f"Found {len(repositories)} repositories in project")
+            if not repositories:
+                logger.warning("No repositories found. This could be due to insufficient permissions (PAT needs 'Code (Read)') or there are no repositories in the project.")
+            else:
+                logger.info(f"Found {len(repositories)} Git repositories in project")
+            
             return repositories
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Failed to get repositories: {str(e)}")
+            error_detail = str(e)
+            if hasattr(e, 'response') and e.response:
+                status_code = e.response.status_code
+                logger.error(f"Repository API failed with status code: {status_code}")
+                
+                if status_code == 401 or status_code == 403:
+                    logger.error("Permission denied when accessing Git repositories. Ensure your PAT has 'Code (Read)' permission.")
+                elif status_code == 404:
+                    logger.error(f"Project {self.project} not found or has no Git repositories.")
+                
+                # Try to extract error details
+                try:
+                    error_content = e.response.json()
+                    logger.error(f"Error details: {error_content}")
+                except Exception:
+                    if e.response.content:
+                        logger.error(f"Error response: {e.response.content.decode('utf-8', errors='ignore')[:200]}")
+            
+            logger.warning(f"Failed to get repositories: {error_detail}")
             return []
 
     def _get_commits(
@@ -1724,8 +1779,16 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         Returns:
             API response containing commits
         """
+        # Get repository name for better logging
+        repo_name = "unknown"
+        if repository_id in self._repository_cache:
+            repo_name = self._repository_cache[repository_id].get("name", "unknown")
+        
+        logger.debug(f"Fetching commits for repository: {repo_name} (ID: {repository_id})")
+        
         params = {
-            "searchCriteria.itemVersion.version": "master",  # Default to master branch
+            # Removed hardcoded master branch filter to work with all branches
+            # "searchCriteria.itemVersion.version": "master",  # This was causing 404 errors when the branch doesn't exist
             "$top": max_results
         }
         
@@ -1734,22 +1797,76 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             # Format date for API
             formatted_date = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
             params["searchCriteria.fromDate"] = formatted_date
+            logger.debug(f"Using time filter: {formatted_date}")
         
         # Add continuation token if specified
         if continuation_token:
             params["continuationToken"] = continuation_token
-            
+        
+        logger.debug(f"Commit API parameters: {params}")
+        
         try:
             endpoint = f"_apis/git/repositories/{repository_id}/commits"
+            logger.debug(f"Calling commits API endpoint: {endpoint}")
+            
             response = self._make_api_request(endpoint, params=params)
+            
+            # Log response status
+            status_code = response.status_code
+            logger.debug(f"Commits API response status code: {status_code}")
+            
+            if status_code != 200:
+                logger.warning(f"Non-200 response from commits API: {status_code}")
+                # Try to extract error message if possible
+                try:
+                    error_msg = response.json()
+                    logger.warning(f"API Error response: {error_msg}")
+                except Exception:
+                    logger.warning(f"Raw error response: {response.text[:200]}")
+            
             response.raise_for_status()
             
             result = response.json()
             commits_count = len(result.get("value", []))
-            logger.info(f"Found {commits_count} commits in repository {repository_id}")
+            
+            if commits_count == 0:
+                logger.info(f"No commits found in repository {repo_name} (ID: {repository_id}). This could be due to an empty repository or the time filter.")
+            else:
+                logger.info(f"Found {commits_count} commits in repository {repo_name} (ID: {repository_id})")
+                
+                # Log a few commit details for debugging
+                if logger.isEnabledFor(logging.DEBUG):
+                    commits = result.get("value", [])
+                    for i, commit in enumerate(commits[:3]):  # Log first 3 commits
+                        commit_id = commit.get("commitId", "")[:8]
+                        author = commit.get("author", {}).get("name", "unknown")
+                        date = commit.get("author", {}).get("date", "")
+                        message = commit.get("comment", "")
+                        if message and len(message) > 50:
+                            message = message[:47] + "..."
+                        logger.debug(f"Commit {i+1}: ID={commit_id}, Author={author}, Date={date}, Message={message}")
+            
             return result
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Failed to get commits for repository {repository_id}: {str(e)}")
+            error_detail = str(e)
+            if hasattr(e, 'response') and e.response:
+                status_code = e.response.status_code
+                logger.error(f"Commits API failed with status code: {status_code}")
+                
+                if status_code == 401 or status_code == 403:
+                    logger.error("Permission denied when accessing Git commits. Ensure your PAT has 'Code (Read)' permission.")
+                elif status_code == 404:
+                    logger.error(f"Repository {repo_name} (ID: {repository_id}) not found or API endpoint has changed.")
+                
+                # Try to extract error details
+                try:
+                    error_content = e.response.json()
+                    logger.error(f"Error details: {error_content}")
+                except Exception:
+                    if e.response.content:
+                        logger.error(f"Error response: {e.response.content.decode('utf-8', errors='ignore')[:200]}")
+            
+            logger.warning(f"Failed to get commits for repository {repo_name} (ID: {repository_id}): {error_detail}")
             return {"value": []}
 
     def _process_commit(self, commit: Dict[str, Any], repository: Dict[str, Any]) -> Optional[Document]:
@@ -2516,4 +2633,4 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             wiki_name = wiki.get("name", "unknown")
             page_path = page.get("path", "unknown")
             logger.error(f"Error processing wiki page {wiki_name}/{page_path}: {str(e)}")
-            return None
+            return None# 'searchCriteria.itemVersion.version': 'master',  # Commented out to avoid branch name issues
