@@ -5,6 +5,7 @@ from datetime import timezone
 from onyx.configs.constants import INDEX_SEPARATOR
 from onyx.context.search.models import IndexFilters
 from onyx.document_index.interfaces import VespaChunkRequest
+from onyx.document_index.vespa_constants import ACCESS_CONTROL_LIST
 from onyx.document_index.vespa_constants import CHUNK_ID
 from onyx.document_index.vespa_constants import DOC_UPDATED_AT
 from onyx.document_index.vespa_constants import DOCUMENT_ID
@@ -74,8 +75,10 @@ def build_vespa_filters(
         filter_str += f'({TENANT_ID} contains "{filters.tenant_id}") and '
 
     # ACL filters
-    # if filters.access_control_list is not None:
-    #     filter_str += _build_or_filters(ACCESS_CONTROL_LIST, filters.access_control_list)
+    if filters.access_control_list is not None:
+        filter_str += _build_or_filters(
+            ACCESS_CONTROL_LIST, filters.access_control_list
+        )
 
     # Source type filters
     source_strs = (

@@ -1314,7 +1314,7 @@ def trigger_indexing_for_cc_pair(
     # run the beat task to pick up the triggers immediately
     priority = OnyxCeleryPriority.HIGHEST if is_user_file else OnyxCeleryPriority.HIGH
     logger.info(f"Sending indexing check task with priority {priority}")
-    primary_app.send_task(
+    client_app.send_task(
         OnyxCeleryTask.CHECK_FOR_INDEXING,
         priority=priority,
         kwargs={"tenant_id": tenant_id},

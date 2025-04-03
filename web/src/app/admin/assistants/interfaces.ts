@@ -35,8 +35,20 @@ export interface Persona {
   starter_messages: StarterMessage[] | null;
   tools: ToolSnapshot[];
   labels?: PersonaLabel[];
-  user_file_ids: number[];
-  user_folder_ids: number[];
+  owner: MinimalUserSnapshot | null;
+  users: MinimalUserSnapshot[];
+  groups: number[];
+  document_sets: DocumentSet[];
+  llm_model_provider_override?: string;
+  llm_model_version_override?: string;
+  num_chunks?: number;
+}
+
+export interface FullPersona extends Persona {
+  search_start_date: Date | null;
+  prompts: Prompt[];
+  llm_relevance_filter?: boolean;
+  llm_filter_extraction?: boolean;
 }
 
 export interface PersonaLabel {

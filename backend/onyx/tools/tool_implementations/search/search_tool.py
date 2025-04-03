@@ -448,6 +448,7 @@ class SearchTool(Tool[SearchToolOverrideKwargs]):
             db_session=self.db_session,
             bypass_acl=self.bypass_acl,
             prompt_config=self.prompt_config,
+            contextual_pruning_config=self.contextual_pruning_config,
         )
 
         # Log what we're doing

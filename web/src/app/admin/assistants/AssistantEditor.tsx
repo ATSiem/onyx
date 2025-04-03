@@ -99,6 +99,7 @@ import { SEARCH_TOOL_ID } from "@/app/chat/tools/constants";
 import TextView from "@/components/chat/TextView";
 import { MinimalOnyxDocument } from "@/lib/search/interfaces";
 import { TabToggle } from "@/components/ui/TabToggle";
+import { MAX_CHARACTERS_PERSONA_DESCRIPTION } from "@/lib/constants";
 
 function findSearchTool(tools: ToolSnapshot[]) {
   return tools.find((tool) => tool.in_code_tool_id === SEARCH_TOOL_ID);
@@ -238,15 +239,7 @@ export function AssistantEditor({
     enabledToolsMap[tool.id] = personaCurrentToolIds.includes(tool.id);
   });
 
-  const {
-    selectedFiles,
-    selectedFolders,
-    addSelectedFile,
-    removeSelectedFile,
-    addSelectedFolder,
-    removeSelectedFolder,
-    clearSelectedItems,
-  } = useDocumentsContext();
+  const { selectedFiles, selectedFolders } = useDocumentsContext();
 
   const [showVisibilityWarning, setShowVisibilityWarning] = useState(false);
 

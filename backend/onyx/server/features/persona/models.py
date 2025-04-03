@@ -157,7 +157,9 @@ class PersonaSnapshot(BaseModel):
 # This is used for flows which need to know all settings
 class FullPersonaSnapshot(PersonaSnapshot):
     search_start_date: datetime | None = None
-    labels: list["PersonaLabelSnapshot"] = []
+    prompts: list[PromptSnapshot] = Field(default_factory=list)
+    llm_relevance_filter: bool = False
+    llm_filter_extraction: bool = False
     user_file_ids: list[int] | None = None
     user_folder_ids: list[int] | None = None
 
@@ -198,27 +200,6 @@ class FullPersonaSnapshot(PersonaSnapshot):
             prompts=[PromptSnapshot.from_model(prompt) for prompt in persona.prompts],
             llm_relevance_filter=persona.llm_relevance_filter,
             llm_filter_extraction=persona.llm_filter_extraction,
-            llm_model_provider_override=persona.llm_model_provider_override,
-            llm_model_version_override=persona.llm_model_version_override,
-            starter_messages=persona.starter_messages,
-            builtin_persona=persona.builtin_persona,
-            is_default_persona=persona.is_default_persona,
-            prompts=[PromptSnapshot.from_model(prompt) for prompt in persona.prompts],
-            tools=[ToolSnapshot.from_model(tool) for tool in persona.tools],
-            document_sets=[
-                DocumentSet.from_model(document_set_model)
-                for document_set_model in persona.document_sets
-            ],
-            users=[
-                MinimalUserSnapshot(id=user.id, email=user.email)
-                for user in persona.users
-            ],
-            groups=[user_group.id for user_group in persona.groups],
-            icon_color=persona.icon_color,
-            icon_shape=persona.icon_shape,
-            uploaded_image_id=persona.uploaded_image_id,
-            search_start_date=persona.search_start_date,
-            labels=[PersonaLabelSnapshot.from_model(label) for label in persona.labels],
             user_file_ids=[file.id for file in persona.user_files],
             user_folder_ids=[folder.id for folder in persona.user_folders],
         )

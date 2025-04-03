@@ -146,7 +146,6 @@ import {
 import { ChatSearchModal } from "./chat_search/ChatSearchModal";
 import { ErrorBanner } from "./message/Resubmit";
 import MinimalMarkdown from "@/components/chat/MinimalMarkdown";
-import { AnalyticsEventType, trackChatMessageSent } from "@/lib/analytics";
 
 const TEMP_USER_MESSAGE_ID = -1;
 const TEMP_ASSISTANT_MESSAGE_ID = -2;
@@ -197,7 +196,9 @@ export function ChatPage({
     setCurrentMessageFiles,
   } = useDocumentsContext();
 
-  const defaultAssistantIdRaw = searchParams.get(SEARCH_PARAM_NAMES.PERSONA_ID);
+  const defaultAssistantIdRaw = searchParams?.get(
+    SEARCH_PARAM_NAMES.PERSONA_ID
+  );
   const defaultAssistantId = defaultAssistantIdRaw
     ? parseInt(defaultAssistantIdRaw)
     : undefined;
@@ -602,37 +603,6 @@ export function ChatPage({
     userFolders,
     searchParams?.get(SEARCH_PARAM_NAMES.USER_FOLDER_ID),
     searchParams?.get(SEARCH_PARAM_NAMES.ALL_MY_DOCUMENTS),
-    addSelectedFolder,
-    clearSelectedItems,
-  ]);
-
-  useEffect(() => {
-    const userFolderId = searchParams.get(SEARCH_PARAM_NAMES.USER_FOLDER_ID);
-    const allMyDocuments = searchParams.get(
-      SEARCH_PARAM_NAMES.ALL_MY_DOCUMENTS
-    );
-
-    if (userFolderId) {
-      const userFolder = userFolders.find(
-        (folder) => folder.id === parseInt(userFolderId)
-      );
-      if (userFolder) {
-        addSelectedFolder(userFolder);
-      }
-    } else if (allMyDocuments === "true" || allMyDocuments === "1") {
-      // Clear any previously selected folders
-
-      clearSelectedItems();
-
-      // Add all user folders to the current context
-      userFolders.forEach((folder) => {
-        addSelectedFolder(folder);
-      });
-    }
-  }, [
-    userFolders,
-    searchParams.get(SEARCH_PARAM_NAMES.USER_FOLDER_ID),
-    searchParams.get(SEARCH_PARAM_NAMES.ALL_MY_DOCUMENTS),
     addSelectedFolder,
     clearSelectedItems,
   ]);
@@ -1489,14 +1459,6 @@ export function ChatPage({
             const user_message_id = messageResponseIDInfo.user_message_id!;
             const assistant_message_id =
               messageResponseIDInfo.reserved_assistant_message_id;
-
-            // Track the user message sent event
-            trackChatMessageSent(
-              currChatSessionId,
-              user_message_id,
-              true, // isUserMessage
-              currentMessageFiles.length > 0 // hasAttachments
-            );
 
             // we will use tempMessages until the regenerated message is complete
             messageUpdates = [

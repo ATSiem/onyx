@@ -345,7 +345,6 @@ export const defaultPersona: Persona = {
   users: [],
   groups: [],
   document_sets: [],
-  prompts: [],
   tools: [],
   starter_messages: null,
   display_priority: null,
@@ -355,4 +354,7 @@ export const defaultPersona: Persona = {
   icon_color: "#FF6F6F",
   user_file_ids: [],
   user_folder_ids: [],
+  llm_model_provider_override: null,
+  llm_model_version_override: null,
+  num_chunks: null,
 };
