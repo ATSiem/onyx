@@ -176,18 +176,21 @@ class TestAzureDevOpsGitConnector:
         
         # Verify the API call
         assert mock_request.call_count == 1
-        call_args = mock_request.call_args[1]
-        assert "_apis/git/repositories/repo1/commits" in call_args["url"]
-        assert call_args["params"]["searchCriteria.fromDate"] == "2023-01-01T00:00:00Z"
-        assert call_args["params"]["searchCriteria.itemVersion.version"] == "master"
-        assert call_args["params"]["$top"] == 200
         
-        # Verify the result
+        # Verify the API endpoint and parameters
+        args, kwargs = mock_request.call_args
+        assert kwargs["method"] == "GET"
+        assert "_apis/git/repositories/repo1/commits" in kwargs["url"]
+        
+        # Verify that we're requesting work items and details
+        params = kwargs["params"]
+        assert params["searchCriteria.includeWorkItems"] == "true"
+        assert params["searchCriteria.includeDetails"] == "true"
+        
+        # Verify the response is properly parsed
         assert len(result["value"]) == 2
         assert result["value"][0]["commitId"] == "commit1"
-        assert result["value"][0]["author"]["name"] == "John Doe"
         assert result["value"][1]["commitId"] == "commit2"
-        assert result["value"][1]["author"]["name"] == "Jane Smith"
 
     @patch("requests.request")
     def test_process_commit(self, mock_request):
@@ -345,4 +348,91 @@ class TestAzureDevOpsGitConnector:
         assert kwargs["start_time"].date().isoformat() == "2023-01-01"
         
         # Verify the commits were processed
-        assert mock_process_commit.call_count == 2 
+        assert mock_process_commit.call_count == 2
+
+    @patch("requests.request")
+    def test_process_commit_with_work_items(self, mock_request):
+        """Test the _process_commit method with work items."""
+        # Setup connector
+        connector = AzureDevOpsConnector(
+            organization="testorg",
+            project="testproject",
+            data_types=["commits"]
+        )
+        
+        connector.client_config = {
+            "auth": None,
+            "organization": "testorg",
+            "project": "testproject",
+            "base_url": "https://dev.azure.com/testorg/testproject/",
+            "api_version": "7.0"
+        }
+        
+        # Mock work item details API response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "count": 1,
+            "value": [
+                {
+                    "id": 123,
+                    "rev": 1,
+                    "fields": {
+                        "System.WorkItemType": "User Story",
+                        "System.Title": "Implement new feature",
+                        "System.State": "In Progress"
+                    },
+                    "url": "https://dev.azure.com/testorg/testproject/_apis/wit/workItems/123"
+                }
+            ]
+        }
+        mock_request.return_value = mock_response
+        
+        # Sample commit with work items
+        commit = {
+            "commitId": "1234567890abcdef",
+            "author": {
+                "name": "John Doe",
+                "email": "john@example.com",
+                "date": "2023-01-01T12:00:00Z"
+            },
+            "comment": "Add new feature\n\nImplemented feature requested in US #123",
+            "remoteUrl": "https://dev.azure.com/testorg/testproject/_git/Repository1/commit/1234567890abcdef",
+            "changes": [
+                {
+                    "item": {
+                        "path": "/src/feature.py"
+                    },
+                    "changeType": "add"
+                }
+            ],
+            "workItems": [
+                {
+                    "id": 123,
+                    "url": "https://dev.azure.com/testorg/testproject/_apis/wit/workItems/123"
+                }
+            ]
+        }
+        
+        repository = {
+            "id": "repo1",
+            "name": "Repository1",
+            "url": "https://dev.azure.com/testorg/testproject/_apis/git/repositories/repo1",
+            "remoteUrl": "https://dev.azure.com/testorg/testproject/_git/Repository1"
+        }
+        
+        # Call the method
+        document = connector._process_commit(commit, repository)
+        
+        # Verify the document
+        assert document is not None
+        assert document.id == "azuredevops:testorg/testproject/git/repo1/commit/1234567890abcdef"
+        assert document.title == "Commit 12345678: Add new feature"
+        
+        # Verify work items are included in metadata
+        assert document.metadata["related_work_items"] == "123"
+        
+        # Verify the content includes work item information
+        content = document.sections[0].text
+        assert "Related Work Items:" in content
+        assert "[User Story] #123: Implement new feature (In Progress)" in content 

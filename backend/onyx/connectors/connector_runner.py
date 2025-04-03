@@ -1,25 +1,24 @@
+from typing import Any, Generic, Generator, TypeVar, cast, Tuple
+
 import sys
 import time
-from collections.abc import Generator
-from datetime import datetime
-from typing import Generic
-from typing import TypeVar
+from datetime import date, datetime, timedelta, timezone
 
-from onyx.connectors.interfaces import BaseConnector
-from onyx.connectors.interfaces import CheckpointConnector
-from onyx.connectors.interfaces import CheckpointOutput
-from onyx.connectors.interfaces import LoadConnector
-from onyx.connectors.interfaces import PollConnector
-from onyx.connectors.models import ConnectorCheckpoint
-from onyx.connectors.models import ConnectorFailure
-from onyx.connectors.models import Document
+from onyx.connectors.interfaces import (
+    BaseConnector,
+    CheckpointConnector,
+    CheckpointOutput,
+    LoadConnector,
+    PollConnector,
+)
+from onyx.connectors.models import ConnectorCheckpoint, ConnectorFailure, Document, EntityFailure
 from onyx.utils.logger import setup_logger
 
+# Initialize logger
+logger = setup_logger(__name__)
 
-logger = setup_logger()
-
-
-TimeRange = tuple[datetime, datetime]
+# Define TimeRange type alias
+TimeRange = Tuple[datetime, datetime]
 
 CT = TypeVar("CT", bound=ConnectorCheckpoint)
 
@@ -54,6 +53,9 @@ class CheckpointOutputWrapper(Generic[CT]):
             if isinstance(document_or_failure, Document):
                 yield document_or_failure, None, None
             elif isinstance(document_or_failure, ConnectorFailure):
+                yield None, document_or_failure, None
+            elif isinstance(document_or_failure, EntityFailure):
+                # Handle EntityFailure objects the same way as ConnectorFailure
                 yield None, document_or_failure, None
             elif isinstance(document_or_failure, tuple):
                 # Some connectors are incorrectly yielding tuples instead of proper objects

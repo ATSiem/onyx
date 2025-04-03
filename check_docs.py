@@ -1,0 +1,1 @@
+from onyx.db import get_session; from onyx.models import Document; with get_session() as session: docs = session.query(Document).order_by(Document.doc_updated_at.desc()).limit(5).all(); print("\nRecently indexed documents:"); [print(f"{doc.title} - {doc.doc_updated_at}") for doc in docs]

@@ -2,6 +2,34 @@
 
 This document outlines the regression tests that verify important fixes made in this fork that differ from the upstream repository.
 
+## Comprehensive Testing Approach
+
+Following the best practices outlined in James Shore's article on ["The Best Product Engineering Org in the World"](https://www.jamesshore.com/v2/blog/2025/the-best-product-engineering-org-in-the-world), we've implemented a robust testing strategy focusing on internal quality:
+
+1. **Comprehensive Test Suite** - A unified testing approach that runs:
+   - Static analysis & linting
+   - Unit tests
+   - Regression tests
+   - Integration tests
+   - Docker-dependent tests
+
+2. **Automated Test Hooks** - Git hooks that automatically run tests at critical points:
+   - Pre-commit: Runs comprehensive tests before each commit
+   - Pre-merge: Runs regression tests before merging from upstream
+   - Post-merge: Runs comprehensive tests after merging to catch any subtle issues
+
+To set up the test hooks:
+
+```bash
+./scripts/setup-git-hooks.sh
+```
+
+To run the comprehensive test suite manually:
+
+```bash
+./scripts/comprehensive-test-suite.sh
+```
+
 ## Automated Testing
 
 We have a pre-merge hook setup to automatically run regression tests before merging changes from upstream. This helps ensure that our custom fixes don't get broken when incorporating upstream changes.
@@ -119,21 +147,26 @@ When making fork-specific fixes:
 
 1. Create a regression test that verifies the fix
 2. Add the test to the appropriate test directory
-3. Add the test to the `scripts/pre-merge-check.sh` script
+3. Add the test to both the `scripts/pre-merge-check.sh` script and `scripts/comprehensive-test-suite.sh`
 4. Document the test in this file
 
 ## Git Hooks
 
-We have two Git hooks set up to ensure our custom functionality is preserved when merging from upstream:
+We have three Git hooks set up to ensure our custom functionality is preserved:
 
-1. **Pre-Merge Hook** (`.git/hooks/pre-merge-commit`): Runs tests before the merge is completed. If tests fail, the merge is aborted.
+1. **Pre-Commit Hook** (`.git/hooks/pre-commit`): Runs comprehensive tests before each commit. If tests fail, the commit is aborted.
 
-2. **Post-Merge Hook** (`.git/hooks/post-merge`): Runs tests after the merge is completed. If tests fail, it warns you to fix issues or consider reverting the merge.
+2. **Pre-Merge Hook** (`.git/hooks/pre-merge-commit`): Runs regression tests before the merge is completed. If tests fail, the merge is aborted.
 
-This dual approach ensures that:
-- Breaking changes aren't merged (pre-merge)
+3. **Post-Merge Hook** (`.git/hooks/post-merge`): Runs comprehensive tests after the merge is completed. If tests fail, it warns you to fix issues or consider reverting the merge.
+
+This approach ensures that:
+- Changes meet quality standards before they're committed (pre-commit)
+- Breaking changes aren't merged from upstream (pre-merge)
 - You catch any subtle issues that might only appear after the merge is complete (post-merge)
 
-## Important Note
+## Important Notes
 
-Always run the regression tests before merging from upstream to ensure custom functionality is preserved. 
+- Always run the regression tests before merging from upstream to ensure custom functionality is preserved.
+- If adding new functionality that requires specific tests, make sure to include them in both the pre-merge checks and comprehensive test suite.
+- Do not commit changes until they've been tested programmatically and/or via the UI/UX. 

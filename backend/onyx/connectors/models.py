@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from pydantic import model_validator
+from pydantic import Field
 
 from onyx.configs.constants import DocumentSource
 from onyx.configs.constants import INDEX_SEPARATOR
@@ -224,6 +225,12 @@ class IndexingDocument(Document):
 class SlimDocument(BaseModel):
     id: str
     perm_sync_data: Any | None = None
+    title: str | None = None
+    updated_at: datetime | None = None
+    link: str | None = None
+    source: DocumentSource | None = None
+    description: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class IndexAttemptMetadata(BaseModel):

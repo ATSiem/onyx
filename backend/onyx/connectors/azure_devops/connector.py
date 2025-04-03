@@ -5,6 +5,8 @@ import time
 from collections.abc import Generator, Iterator
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Optional, cast
+import re
+import os
 
 import requests
 from pydantic import BaseModel
@@ -983,6 +985,10 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             logger.error(error_message)
             raise ConnectorMissingCredentialError("Azure DevOps")
         
+        # Track if we have a new continuation token
+        new_continuation_token = None
+        has_more = False
+        
         # Process each data type
         for data_type in self.data_types:
             if data_type == self.DATA_TYPE_WORK_ITEMS:
@@ -1002,11 +1008,11 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                     new_continuation_token = work_items_response.get("continuationToken")
                     
                     # Check if there are more results
-                    has_more = bool(new_continuation_token and len(work_item_refs) == MAX_RESULTS_PER_PAGE)
+                    has_more = bool(new_continuation_token and len(work_item_refs) == self.MAX_RESULTS_PER_PAGE)
                     
                     # Get detailed information for each work item in batches
-                    for i in range(0, len(work_item_refs), MAX_BATCH_SIZE):
-                        batch = work_item_refs[i:i + MAX_BATCH_SIZE]
+                    for i in range(0, len(work_item_refs), self.MAX_BATCH_SIZE):
+                        batch = work_item_refs[i:i + self.MAX_BATCH_SIZE]
                         batch_ids = [int(item["id"]) for item in batch]
                         
                         # Get detailed work item information
@@ -1058,14 +1064,27 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                     
                     logger.error(f"Failed to fetch work items: {error_detail}")
                     yield EntityFailure(entity_id="azure_devops_work_items")
-                    # Return the original checkpoint here to allow retrying without losing progress
-                    return checkpoint
+                    
+                    # Create a new checkpoint with the same continuation token
+                    new_checkpoint = AzureDevOpsConnectorCheckpoint(
+                        has_more=True,
+                        continuation_token=checkpoint.continuation_token
+                    )
+                    # Must return the checkpoint, not yield it
+                    return new_checkpoint
+                    
                 except Exception as e:
                     # Handle other errors
                     logger.error(f"Error fetching work items: {str(e)}")
                     yield EntityFailure(entity_id="azure_devops_work_items")
-                    # Return the original checkpoint here to allow retrying without losing progress
-                    return checkpoint
+                    
+                    # Create a new checkpoint with the same continuation token
+                    new_checkpoint = AzureDevOpsConnectorCheckpoint(
+                        has_more=True,
+                        continuation_token=checkpoint.continuation_token
+                    )
+                    # Must return the checkpoint, not yield it
+                    return new_checkpoint
                 
             elif data_type == self.DATA_TYPE_COMMITS:
                 # Process Git commits
@@ -1203,17 +1222,19 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                     )
         
         # Use continuation token only for work items, as other data types don't support pagination the same way
-        has_more = bool(new_continuation_token) if 'new_continuation_token' in locals() else bool(checkpoint.continuation_token)
+        has_more = bool(new_continuation_token) if new_continuation_token is not None else bool(checkpoint.continuation_token)
         
-        logger.info(f"Finished processing documents with continuationToken: {new_continuation_token if 'new_continuation_token' in locals() else None}")
+        logger.info(f"Finished processing documents with continuationToken: {new_continuation_token}")
         
         # Create new checkpoint with the updated continuation token
         new_checkpoint = AzureDevOpsConnectorCheckpoint(
             has_more=has_more,
-            continuation_token=new_continuation_token if 'new_continuation_token' in locals() else checkpoint.continuation_token
+            continuation_token=new_continuation_token if new_continuation_token is not None else checkpoint.continuation_token
         )
         
-        # Return the final checkpoint instead of yielding it
+        # Return the final checkpoint (do not yield it)
+        # CheckpointOutputWrapper will grab this returned value
+        logger.info(f"Returning final checkpoint: has_more={has_more}, token={new_continuation_token}")
         return new_checkpoint
 
     @override
@@ -1363,14 +1384,121 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                             
                             # Create slim document
                             first_line = comment.split('\n')[0][:50] if comment else ""
+                            
+                            # Special handling for build version numbers to prevent truncation
+                            build_version_match = re.search(r'Build\s+(\d+\.\d+\.\d+)', first_line)
+                            if build_version_match:
+                                version_num = build_version_match.group(1)
+                                # Ensure the version number isn't truncated
+                                first_line = first_line.replace(version_num, f"{version_num}")
+                                
                             slim_doc = SlimDocument(
                                 id=f"azuredevops:{self.organization}/{self.project}/git/{repo_id}/commit/{commit_id}",
                                 title=f"Commit {commit_id[:8]}: {first_line}",
                                 updated_at=format_date(commit_time),
                                 link=commit_url,
                                 source=DocumentSource.AZURE_DEVOPS,
+                                description=comment[:500] if comment else None,
+                                perm_sync_data={
+                                    "type": "commit",
+                                    "repository_name": repo_name,
+                                    "repository_id": repo_id,
+                                    "commit_id": commit_id,
+                                    "author_name": commit.get("author", {}).get("name", ""),
+                                    "author_email": commit.get("author", {}).get("email", ""),
+                                }
                             )
                             
+                            # Add related work items to perm_sync_data if available
+                            work_items = commit.get("workItems", [])
+                            if work_items:
+                                logger.info(f"Found {len(work_items)} related work items for commit {commit_id[:8]}")
+                                work_item_ids = []
+                                
+                                for work_item in work_items:
+                                    work_item_id = work_item.get("id")
+                                    work_item_url = work_item.get("url", "")
+                                    
+                                    # Parse work item ID from URL if not provided directly
+                                    if not work_item_id and work_item_url:
+                                        # Extract ID from URL pattern like .../workitems/123?...
+                                        match = re.search(r"/workitems/(\d+)", work_item_url, re.IGNORECASE)
+                                        if match:
+                                            work_item_id = match.group(1)
+                                    
+                                    if work_item_id:
+                                        work_item_ids.append(str(work_item_id))
+                                        logger.debug(f"Added work item ID: {work_item_id} to commit {commit_id[:8]}")
+                                    else:
+                                        logger.warning(f"Could not extract work item ID from URL: {work_item_url}")
+                                
+                                if work_item_ids:
+                                    slim_doc.perm_sync_data["related_work_items"] = ",".join(work_item_ids)
+                                    
+                                    # Try to get first work item details for title enrichment
+                                    try:
+                                        first_work_item_id = int(work_item_ids[0])
+                                        details = self._get_work_item_details([first_work_item_id])
+                                        if details and details[0]:
+                                            work_item_detail = details[0]
+                                            work_item_type = work_item_detail.get("fields", {}).get("System.WorkItemType", "")
+                                            work_item_title = work_item_detail.get("fields", {}).get("System.Title", "")
+                                            
+                                            if work_item_type and work_item_title:
+                                                slim_doc.perm_sync_data["related_work_item_title"] = f"[{work_item_type}] #{first_work_item_id}: {work_item_title}"
+                                                logger.info(f"Added work item details to commit {commit_id[:8]}: {work_item_type} #{first_work_item_id}: {work_item_title}")
+                                    except Exception as e:
+                                        logger.warning(f"Error enriching slim document with work item details: {str(e)}")
+                            else:
+                                # Try to extract work item references from commit message
+                                # Look for patterns like "#123" or "AB#123" in commit messages
+                                if comment:
+                                    # Match common work item reference patterns
+                                    wi_refs = re.findall(r'(?:AB)?#(\d+)', comment)
+                                    if wi_refs:
+                                        logger.info(f"Found {len(wi_refs)} work item references in commit message for {commit_id[:8]}")
+                                        slim_doc.perm_sync_data["possible_work_items"] = ",".join(wi_refs)
+                                        
+                                        # Try to verify and use the work item references
+                                        verified_refs = []
+                                        for wi_ref in wi_refs[:3]:  # Limit to first 3 references to avoid excessive API calls
+                                            try:
+                                                ref_id = int(wi_ref)
+                                                details = self._get_work_item_details([ref_id])
+                                                if details and details[0]:
+                                                    work_item_detail = details[0]
+                                                    work_item_type = work_item_detail.get("fields", {}).get("System.WorkItemType", "")
+                                                    work_item_title = work_item_detail.get("fields", {}).get("System.Title", "")
+                                                    
+                                                    if work_item_type and work_item_title:
+                                                        verified_refs.append(str(ref_id))
+                                                        # Use the first verified reference for the title enrichment
+                                                        if not slim_doc.perm_sync_data.get("related_work_item_title"):
+                                                            slim_doc.perm_sync_data["related_work_item_title"] = f"[{work_item_type}] #{ref_id}: {work_item_title}"
+                                                            logger.info(f"Added work item from message reference to commit {commit_id[:8]}: {work_item_type} #{ref_id}")
+                                            except Exception as e:
+                                                logger.warning(f"Error verifying work item {wi_ref} from commit message: {str(e)}")
+                                        
+                                        if verified_refs:
+                                            slim_doc.perm_sync_data["related_work_items"] = ",".join(verified_refs)
+                                            logger.info(f"Added {len(verified_refs)} verified work items from message references to commit {commit_id[:8]}")
+                            
+                            # Add file changes data if available
+                            changes = commit.get("changes", [])
+                            if changes:
+                                changed_files = []
+                                for change in changes:
+                                    item = change.get("item", {})
+                                    path = item.get("path", "")
+                                    if path:
+                                        changed_files.append(path)
+                                
+                                if changed_files:
+                                    # Add up to 5 files to perm_sync_data
+                                    slim_doc.perm_sync_data["changed_files"] = "; ".join(changed_files[:5])
+                                    if len(changed_files) > 5:
+                                        slim_doc.perm_sync_data["changed_files"] += f"; +{len(changed_files) - 5} more"
+
                             slim_documents.append(slim_doc)
                 
                 elif data_type == self.DATA_TYPE_TEST_RESULTS or data_type == self.DATA_TYPE_TEST_STATS:
@@ -1789,7 +1917,11 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         params = {
             # Removed hardcoded master branch filter to work with all branches
             # "searchCriteria.itemVersion.version": "master",  # This was causing 404 errors when the branch doesn't exist
-            "$top": max_results
+            "$top": max_results,
+            # Include changes and work items in the response - explicitly set these to true
+            "searchCriteria.includeWorkItems": "true",
+            "searchCriteria.includeDetails": "true",
+            "$orderby": "author/date desc"  # Sort by newest first
         }
         
         # Add time filter if specified
@@ -1805,28 +1937,17 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         
         logger.debug(f"Commit API parameters: {params}")
         
+        # Try to fetch commits
         try:
-            endpoint = f"_apis/git/repositories/{repository_id}/commits"
-            logger.debug(f"Calling commits API endpoint: {endpoint}")
-            
-            response = self._make_api_request(endpoint, params=params)
-            
-            # Log response status
-            status_code = response.status_code
-            logger.debug(f"Commits API response status code: {status_code}")
-            
-            if status_code != 200:
-                logger.warning(f"Non-200 response from commits API: {status_code}")
-                # Try to extract error message if possible
-                try:
-                    error_msg = response.json()
-                    logger.warning(f"API Error response: {error_msg}")
-                except Exception:
-                    logger.warning(f"Raw error response: {response.text[:200]}")
-            
+            response = self._make_api_request(
+                f"_apis/git/repositories/{repository_id}/commits",
+                params=params
+            )
             response.raise_for_status()
             
             result = response.json()
+            
+            # Get commit count
             commits_count = len(result.get("value", []))
             
             if commits_count == 0:
@@ -1834,17 +1955,26 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             else:
                 logger.info(f"Found {commits_count} commits in repository {repo_name} (ID: {repository_id})")
                 
-                # Log a few commit details for debugging
+                # Log commit details for debugging
                 if logger.isEnabledFor(logging.DEBUG):
                     commits = result.get("value", [])
-                    for i, commit in enumerate(commits[:3]):  # Log first 3 commits
+                    for i, commit in enumerate(commits[:5]):  # Log first 5 commits
                         commit_id = commit.get("commitId", "")[:8]
                         author = commit.get("author", {}).get("name", "unknown")
                         date = commit.get("author", {}).get("date", "")
                         message = commit.get("comment", "")
                         if message and len(message) > 50:
                             message = message[:47] + "..."
-                        logger.debug(f"Commit {i+1}: ID={commit_id}, Author={author}, Date={date}, Message={message}")
+                        work_items = commit.get("workItems", [])
+                        work_item_count = len(work_items)
+                        logger.debug(f"Commit {i+1}: ID={commit_id}, Author={author}, Date={date}, Message={message}, Work Items={work_item_count}")
+                        
+                        # Log work item details if any
+                        if work_item_count > 0 and logger.isEnabledFor(logging.DEBUG):
+                            for j, work_item in enumerate(work_items[:3]):  # Log first 3 work items
+                                wi_id = work_item.get("id")
+                                wi_url = work_item.get("url", "")
+                                logger.debug(f"  - Work Item {j+1}: ID={wi_id}, URL={wi_url}")
             
             return result
         except requests.exceptions.RequestException as e:
@@ -1936,6 +2066,48 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                 if changes_text:
                     content_parts.append(f"\nChanges:\n" + "\n".join(changes_text))
             
+            # Add work items if available
+            work_items = commit.get("workItems", [])
+            if work_items:
+                work_items_text = []
+                work_items_ids = []
+                
+                for work_item in work_items:
+                    work_item_id = work_item.get("id")
+                    work_item_url = work_item.get("url", "")
+                    
+                    # Parse work item ID from URL if not provided directly
+                    if not work_item_id and work_item_url:
+                        # Extract ID from URL pattern like .../workitems/123?...
+                        match = re.search(r"/workitems/(\d+)", work_item_url, re.IGNORECASE)
+                        if match:
+                            work_item_id = match.group(1)
+                    
+                    if work_item_id:
+                        work_items_ids.append(str(work_item_id))
+                        
+                        # Try to get work item details for richer information
+                        try:
+                            details = self._get_work_item_details([int(work_item_id)])
+                            if details and details[0]:
+                                work_item_detail = details[0]
+                                work_item_type = work_item_detail.get("fields", {}).get("System.WorkItemType", "")
+                                work_item_title = work_item_detail.get("fields", {}).get("System.Title", "")
+                                work_item_state = work_item_detail.get("fields", {}).get("System.State", "")
+                                
+                                if work_item_type and work_item_title:
+                                    work_items_text.append(f"[{work_item_type}] #{work_item_id}: {work_item_title} ({work_item_state})")
+                                else:
+                                    work_items_text.append(f"Work Item #{work_item_id}")
+                            else:
+                                work_items_text.append(f"Work Item #{work_item_id}")
+                        except Exception as e:
+                            logger.warning(f"Error fetching work item {work_item_id} details: {str(e)}")
+                            work_items_text.append(f"Work Item #{work_item_id}")
+                
+                if work_items_text:
+                    content_parts.append(f"\nRelated Work Items:\n" + "\n".join(work_items_text))
+            
             sections.append(TextSection(
                 text="\n".join(content_parts),
                 link=commit_url
@@ -1951,6 +2123,50 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                 "author_email": author_email,
                 "commit_url": commit_url,
             }
+            
+            # Add work item IDs to metadata
+            if work_items:
+                work_item_ids = []
+                for work_item in work_items:
+                    work_item_id = work_item.get("id")
+                    if not work_item_id and "url" in work_item:
+                        # Extract ID from URL pattern
+                        match = re.search(r"/workitems/(\d+)", work_item.get("url", ""), re.IGNORECASE)
+                        if match:
+                            work_item_id = match.group(1)
+                    
+                    if work_item_id:
+                        work_item_ids.append(str(work_item_id))
+                
+                if work_item_ids:
+                    metadata["related_work_items"] = ",".join(work_item_ids)
+            
+            # Add detailed changes metadata
+            if changes:
+                changed_files = []
+                for change in changes:
+                    item = change.get("item", {})
+                    path = item.get("path", "")
+                    if path:
+                        changed_files.append(path)
+                
+                if changed_files:
+                    # Add up to 5 files to metadata
+                    metadata["changed_files"] = "; ".join(changed_files[:5])
+                    if len(changed_files) > 5:
+                        metadata["changed_files"] += f"; +{len(changed_files) - 5} more"
+                    
+                    # Count files by extension
+                    extensions = {}
+                    for file in changed_files:
+                        ext = os.path.splitext(file)[1].lower()
+                        if ext:
+                            extensions[ext] = extensions.get(ext, 0) + 1
+                        else:
+                            extensions["no_extension"] = extensions.get("no_extension", 0) + 1
+                    
+                    if extensions:
+                        metadata["file_extensions"] = "; ".join([f"{ext}: {count}" for ext, count in extensions.items()])
             
             # Extract dates
             if commit_time:
@@ -1968,6 +2184,73 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
             
             # Build document
             first_line_title = comment.split('\n')[0][:50] if comment else ""
+            
+            # Special handling for build version numbers to prevent truncation
+            build_version_match = re.search(r'Build\s+(\d+\.\d+\.\d+)', first_line_title)
+            if build_version_match:
+                version_num = build_version_match.group(1)
+                # Ensure the version number isn't truncated in the title
+                first_line_title = first_line_title.replace(version_num, f"{version_num}")
+            
+            # If we have work items from the API, also check commit message for additional references
+            if work_items and comment:
+                # Check if we already have work_items_ids defined
+                if 'work_items_ids' in locals() and work_items_ids:
+                    # Extract work item references from commit message to add to existing ones
+                    wi_refs = re.findall(r'(?:AB)?#(\d+)', comment)
+                    for wi_ref in wi_refs:
+                        if wi_ref not in work_items_ids:
+                            try:
+                                # Try to verify the work item exists
+                                ref_id = int(wi_ref)
+                                details = self._get_work_item_details([ref_id])
+                                if details and details[0]:
+                                    work_item_detail = details[0]
+                                    work_item_type = work_item_detail.get("fields", {}).get("System.WorkItemType", "")
+                                    work_item_title = work_item_detail.get("fields", {}).get("System.Title", "")
+                                    work_item_state = work_item_detail.get("fields", {}).get("System.State", "")
+                                    
+                                    if work_item_type and work_item_title:
+                                        work_items_text.append(f"[{work_item_type}] #{ref_id}: {work_item_title} ({work_item_state})")
+                                        work_items_ids.append(str(ref_id))
+                                        logger.info(f"Added work item from commit message reference: {work_item_type} #{ref_id}")
+                            except Exception as e:
+                                logger.warning(f"Error verifying work item from commit message reference: {str(e)}")
+            # No work items from API, try to extract from commit message 
+            elif not work_items and comment:
+                # Extract work item references from commit message when no API work items are provided
+                wi_refs = re.findall(r'(?:AB)?#(\d+)', comment)
+                if wi_refs:
+                    logger.info(f"No linked work items for commit {commit_id[:8]}, but found {len(wi_refs)} references in commit message")
+                    
+                    # Store these as potential work items in metadata for visibility
+                    metadata["possible_work_items"] = ",".join(wi_refs)
+                    
+                    # Check first reference to see if it's valid
+                    try:
+                        message_work_items_text = []
+                        message_work_items_ids = []
+                        
+                        for wi_ref in wi_refs[:3]:  # Limit to first 3 references to avoid excessive API calls
+                            ref_id = int(wi_ref)
+                            details = self._get_work_item_details([ref_id])
+                            if details and details[0]:
+                                work_item_detail = details[0]
+                                work_item_type = work_item_detail.get("fields", {}).get("System.WorkItemType", "")
+                                work_item_title = work_item_detail.get("fields", {}).get("System.Title", "")
+                                work_item_state = work_item_detail.get("fields", {}).get("System.State", "")
+                                
+                                if work_item_type and work_item_title:
+                                    message_work_items_text.append(f"[{work_item_type}] #{ref_id}: {work_item_title} ({work_item_state})")
+                                    message_work_items_ids.append(str(ref_id))
+                                    logger.info(f"Verified work item from commit message: {work_item_type} #{ref_id}")
+                        
+                        if message_work_items_text:
+                            content_parts.append(f"\nPossible Related Work Items (from commit message):\n" + "\n".join(message_work_items_text))
+                            metadata["related_work_items"] = ",".join(message_work_items_ids)
+                    except Exception as e:
+                        logger.warning(f"Error verifying work item from commit message: {str(e)}")
+            
             return Document(
                 id=f"azuredevops:{self.organization}/{self.project}/git/{repo_id}/commit/{commit_id}",
                 title=f"Commit {commit_id[:8]}: {first_line_title}",
