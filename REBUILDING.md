@@ -209,103 +209,38 @@ For email invites to work properly, ensure `MULTI_TENANT=true` is set in your `.
 
 ### Testing
 
-#### Pre-Merge and Azure DevOps Tests
-Before rebuilding the development environment, run the pre-merge check script which includes:
-1. Backend regression tests
-2. Email invite tests
-3. Zulip schema compatibility tests
-4. Unstructured API integration checks
-5. Unstructured API health check
-6. Azure DevOps connector tests (40 tests)
+#### Pre-Merge and Regression Tests
+Before rebuilding the development environment or merging upstream changes, run the pre-merge check script:
 
 ```bash
-# Run all pre-merge checks and Azure DevOps tests
+# Run all pre-merge checks
 ./scripts/pre-merge-check.sh
 ```
 
-The pre-merge check script will run all necessary tests in sequence. If any test fails, the script will stop and report the error.
+This script runs:
+1. Backend regression tests for our custom fixes
+2. Integration tests for connectors with our modifications
+3. Unstructured API integration and health checks
+4. Other fork-specific tests
 
-#### Frontend Testing
-The Onyx codebase uses Jest for frontend testing with the following setup:
+For detailed documentation of all regression tests and the fixes they protect, see `TESTING.md`.
 
-```bash
-# Run all tests
-cd web
-npm test
-
-# Run specific test file
-npm test -- src/components/llm/LLMSelector.test.tsx
-
-# Run tests with coverage
-npm test -- --coverage
-```
-
-Frontend tests use:
-- Jest as the test runner
-- jsdom for DOM simulation
-- @testing-library/react for component testing
-- TypeScript support via babel-jest
-
-The Jest configuration is in `web/jest.config.js` and Babel configuration in `web/babel.config.js`.
-
-> **Note**: E2E tests using Playwright are not currently set up in this fork.
-
-#### Backend Testing
-The backend uses pytest for testing with the following structure:
+#### Running Specific Tests
 
 ```bash
-# Run all backend tests
+# Backend tests
 cd backend
-python -m pytest
+python -m pytest                             # All tests
+python -m pytest tests/unit/path/to/test.py  # Specific test
 
-# Run specific test file
-python -m pytest tests/unit/connectors/azure_devops/test_azure_devops_connector.py -v
-
-# Run all Azure DevOps connector tests (40 tests)
-python -m pytest tests/unit/connectors/azure_devops/test_*.py -v
+# Frontend tests
+cd web
+npm test                                     # All tests
+npm test -- src/path/to/test.tsx             # Specific test
 ```
-
-Backend test categories:
-- **Unit Tests**: Individual function/class testing
-- **Integration Tests**: Component interaction testing
-- **Regression Tests**: Bug fix verification
-- **Connector Tests**: Specific tests for data connectors (e.g., Azure DevOps)
-
-#### Azure DevOps Connector Tests
-The Azure DevOps connector has 40 tests across multiple files:
-- `test_azure_devops_connector.py`: Core connector functionality
-- `test_azure_devops_credential_flow.py`: Authentication
-- `test_azure_devops_document.py`: Document processing
-- `test_azure_devops_independent.py`: Utility functions
-- `test_azure_devops_pagination.py`: Pagination and batching
-- `test_azure_devops_regression.py`: Bug fixes
-- `test_azure_devops_resolution_status.py`: Resolution status handling
-- `test_azure_devops_utils.py`: Helper functions
-
-#### Fork-Specific Regression Tests
-This fork contains specific regression tests to verify our custom fixes are maintained when merging from upstream:
-
-```bash
-# Run regression tests
-./scripts/pre-merge-check.sh
-```
-
-The pre-merge check script runs:
-1. Backend regression tests
-2. Email invite tests
-3. Zulip schema compatibility tests
-4. Unstructured API integration checks
-5. Unstructured API health check
-6. Azure DevOps connector tests
-
-See `REGRESSION_TESTS.md` for details on the regression tests and how they protect our custom functionality.
 
 #### Best Practices
 1. Write tests for any bugs found in production
-2. Use descriptive test names that explain what's being tested
-3. Keep tests focused on testing behavior, not implementation
-4. Run tests before pushing to main branch
-5. Add appropriate comments to regression tests explaining the issue they're addressing
-
-#### Example: Regression Test
-See `web/src/components/llm/LLMSelector.test.tsx` for an example of a regression test that ensures specific model names are properly filtered.
+2. Run tests before pushing to main branch
+3. Ensure the pre-merge tests pass before merging from upstream
+4. Document all fork-specific modifications in TESTING.md

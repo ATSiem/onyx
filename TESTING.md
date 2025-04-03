@@ -74,7 +74,28 @@ To run the regression tests manually:
 
 **Note:** The schema compatibility tests don't require the actual Zulip library, allowing them to run in CI environments without additional dependencies.
 
-### 5. PostHog Analytics Integration
+### 5. Azure DevOps Connector Improvements
+
+**Issue:** The Azure DevOps connector had case sensitivity issues with the content_scope parameter and was failing to retrieve git commits due to hardcoded branch names.
+
+**Fix:**
+- Modified the connector to handle different capitalization of the content_scope value (both "everything" and "Everything" work)
+- Removed the hardcoded "master" branch name in the git commits query to support repositories with different default branches
+- Added enhanced logging for better troubleshooting
+
+**Tests:**
+- Content Scope Tests: `backend/tests/unit/connectors/azure_devops/test_azure_devops_content_scope.py` - Verifies:
+  1. The connector correctly processes both lowercase and uppercase content_scope values
+  2. Git commits are properly enabled when content_scope is set to "everything" (case-insensitive)
+- Git Commits Tests: `backend/tests/unit/connectors/azure_devops/test_azure_devops_git_commits.py` - Verifies:
+  1. Git repositories can be fetched correctly
+  2. Commits can be retrieved without requiring a specific branch name
+  3. Commit data is properly processed into Documents
+
+**Utility Scripts:**
+- Diagnostic and fix scripts are maintained in `backend/tests/scripts/azure_devops/` for future reference and debugging
+
+### 6. PostHog Analytics Integration
 
 **Issue:** We needed to track chat usage metrics (thread creation and message sending) for internal analytics.
 
