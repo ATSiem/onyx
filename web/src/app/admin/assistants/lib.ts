@@ -348,7 +348,6 @@ export const defaultPersona: Persona = {
   tools: [],
   starter_messages: null,
   display_priority: null,
-  search_start_date: null,
   owner: null,
   icon_shape: 50910,
   icon_color: "#FF6F6F",
