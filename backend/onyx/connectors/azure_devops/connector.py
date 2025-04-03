@@ -548,7 +548,7 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
 
     @retry_builder(tries=3, backoff=2)  # Add retry mechanism
     def _get_work_item_details(self, work_item_ids: List[int]) -> List[Dict[str, Any]]:
-        """Get detailed information for work items with improved rate limiting."""
+        """Get detailed information for work items with improved rate limiting and field handling."""
         if not work_item_ids:
             return []
 
@@ -577,105 +577,225 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
                         "Microsoft.VSTS.Common.Severity": cached_doc.metadata.get("severity", ""),
                         "System.ResolvedDate": cached_doc.metadata.get("resolved_date", ""),
                         "Microsoft.VSTS.Common.ClosedDate": cached_doc.metadata.get("closed_date", ""),
-                        "Microsoft.VSTS.Common.Resolution": cached_doc.metadata.get("resolution", ""),
-                        "System.ResolvedBy": cached_doc.metadata.get("resolved_by", ""),
-                        "System.ClosedBy": cached_doc.metadata.get("closed_by", ""),
-                        "System.ClosedDate": cached_doc.metadata.get("closed_date", ""),
+                        "Microsoft.VSTS.Common.Resolution": cached_doc.metadata.get("resolution", "")
                     }
                 }
                 all_work_items.append(work_item)
             else:
                 uncached_ids.append(work_item_id)
 
-        # If we have uncached IDs, fetch them in batches
-        if uncached_ids:
-            for i in range(0, len(uncached_ids), self.MAX_BATCH_SIZE):
-                batch_ids = uncached_ids[i:i + self.MAX_BATCH_SIZE]
-                batch_ids_str = ",".join(map(str, batch_ids))
+        if not uncached_ids:
+            return all_work_items
 
-                # Define essential and optional fields to reduce request complexity
-                # Essential fields are always fetched
-                essential_fields = [
-                    "System.Id",
-                    "System.Title",
-                    "System.Description",
-                    "System.WorkItemType",
-                    "System.State",
-                    "System.CreatedBy",
-                    "System.CreatedDate",
-                    "System.ChangedBy",
-                    "System.ChangedDate",
-                    "System.Tags",
-                    "System.AssignedTo"
+        # Get essential fields first - these should always be available
+        try:
+            essential_fields = [
+                "System.Id", 
+                "System.Title", 
+                "System.Description", 
+                "System.WorkItemType", 
+                "System.State",
+                "System.CreatedBy", 
+                "System.CreatedDate", 
+                "System.ChangedBy", 
+                "System.ChangedDate",
+                "System.Tags", 
+                "System.AssignedTo"
+            ]
+            
+            fields_param = ",".join(essential_fields)
+            ids_param = ",".join(str(work_id) for work_id in uncached_ids)
+            
+            logger.info(f"Fetching {len(uncached_ids)} work items with essential fields")
+            
+            essential_response = self._make_api_request(
+                "_apis/wit/workitems",
+                params={
+                    "ids": ids_param,
+                    "fields": fields_param
+                }
+            )
+            
+            essential_response.raise_for_status()
+            essential_result = essential_response.json()
+            
+            # Start with these results
+            work_items = essential_result.get("value", [])
+            
+            # Try to get additional fields, but handle case where some fields might not exist
+            try:
+                # These fields are generally safe across all projects
+                additional_fields = [
+                    "System.AreaPath", 
+                    "System.IterationPath", 
+                    "Microsoft.VSTS.Common.Priority", 
+                    "Microsoft.VSTS.Common.Severity"
                 ]
                 
-                # Try with essential fields first
+                # These fields might not exist in some projects
+                resolution_fields = [
+                    "System.ResolvedDate", 
+                    "Microsoft.VSTS.Common.ClosedDate", 
+                    "Microsoft.VSTS.Common.Resolution",
+                    "System.ResolvedBy", 
+                    "System.ClosedBy", 
+                    "System.ClosedDate"
+                ]
+                
+                # Use a smarter approach for field discovery
+                # Rather than having a special case for DFP_10, discover the fields dynamically
+                
+                # Test first ID with all fields to detect which ones are available
+                test_id = uncached_ids[0]
+                safe_resolution_fields = []
+                
+                # Try all resolution fields in one request first - this is faster if they all exist
                 try:
-                    logger.info(f"Fetching {len(batch_ids)} work items with essential fields")
-                    endpoint = f"_apis/wit/workitems"
-                    params = {
-                        "ids": batch_ids_str,
-                        "fields": ",".join(essential_fields)
-                    }
-
-                    response = self._make_api_request(endpoint, method="GET", params=params)
-                    response.raise_for_status()
-
-                    # Process the response
-                    batch_data = response.json()
-                    if "value" in batch_data:
-                        all_work_items.extend(batch_data["value"])
-
-                    # Now try to get additional fields in a separate request if needed
-                    try:
-                        additional_fields = [
-                            "System.AreaPath",
-                            "System.IterationPath",
-                            "Microsoft.VSTS.Common.Priority",
-                            "Microsoft.VSTS.Common.Severity",
-                            "System.ResolvedDate",
-                            "Microsoft.VSTS.Common.ClosedDate",
-                            "Microsoft.VSTS.Common.Resolution",
-                            "System.ResolvedBy",
-                            "System.ClosedBy",
-                            "System.ClosedDate"
-                        ]
-                        
-                        # Only fetch additional fields if we have items
-                        if "value" in batch_data and batch_data["value"]:
-                            logger.info(f"Fetching additional fields for {len(batch_ids)} work items")
-                            additional_params = {
-                                "ids": batch_ids_str,
-                                "fields": ",".join(additional_fields)
-                            }
-                            
-                            additional_response = self._make_api_request(endpoint, method="GET", params=additional_params)
-                            additional_response.raise_for_status()
-                            
-                            additional_data = additional_response.json()
-                            if "value" in additional_data:
-                                # Merge the additional fields into the existing work items
-                                for additional_item in additional_data["value"]:
-                                    for existing_item in all_work_items:
-                                        if existing_item["id"] == additional_item["id"]:
-                                            # Merge fields
-                                            existing_item["fields"].update(additional_item.get("fields", {}))
-                                            break
-                    except requests.exceptions.RequestException as additional_e:
-                        # Log the error but continue with the essential fields we already have
-                        logger.warning(f"Failed to fetch additional fields: {str(additional_e)}")
-                        # Don't re-raise, we can continue with essential fields
-                except requests.exceptions.RequestException as e:
-                    logger.error(f"Failed to fetch work items: {str(e)}")
+                    all_fields_response = self._make_api_request(
+                        "_apis/wit/workitems",
+                        params={
+                            "ids": str(test_id),
+                            "fields": ",".join(resolution_fields)
+                        }
+                    )
+                    all_fields_response.raise_for_status()
+                    # All fields exist, add them all
+                    safe_resolution_fields = resolution_fields
+                    logger.info(f"All resolution fields are available in project {self.project}")
+                except Exception as e:
+                    # Try each field individually to see which ones exist
+                    logger.info(f"Some resolution fields aren't available in project {self.project}, detecting available fields...")
+                    
+                    # Try to parse the error to determine which fields are missing
+                    missing_fields = set()
                     if hasattr(e, 'response') and e.response is not None:
                         try:
-                            error_details = e.response.json()
-                            logger.error(f"Error details: {error_details}")
-                        except:
-                            logger.error(f"Error details: {e.response.text[:500]}")
-                    raise ConnectorValidationError(f"Failed to fetch work items: {str(e)}")
-
+                            error_json = e.response.json()
+                            error_msg = error_json.get('message', '')
+                            # Extract field name from error like "TF51535: Cannot find field System.ResolvedDate"
+                            import re
+                            field_match = re.search(r"Cannot find field ([^\.]+\.[^\s\.]+)", error_msg)
+                            if field_match:
+                                missing_field = field_match.group(1)
+                                missing_fields.add(missing_field)
+                                logger.info(f"Detected missing field from error: {missing_field}")
+                        except Exception:
+                            pass
+                    
+                    # For each field, check if it exists unless we already know it's missing
+                    for field in resolution_fields:
+                        if field in missing_fields:
+                            logger.info(f"Skipping known missing field: {field}")
+                            continue
+                            
+                        try:
+                            field_response = self._make_api_request(
+                                "_apis/wit/workitems",
+                                params={
+                                    "ids": str(test_id),
+                                    "fields": field
+                                }
+                            )
+                            field_response.raise_for_status()
+                            # Field exists, add it
+                            safe_resolution_fields.append(field)
+                            logger.info(f"Field {field} is available in project {self.project}")
+                        except Exception as field_e:
+                            logger.info(f"Field {field} not available in project {self.project}")
+                            
+                            # Try to track other missing fields from errors
+                            if hasattr(field_e, 'response') and field_e.response is not None:
+                                try:
+                                    error_json = field_e.response.json()
+                                    error_msg = error_json.get('message', '')
+                                    import re
+                                    field_match = re.search(r"Cannot find field ([^\.]+\.[^\s\.]+)", error_msg)
+                                    if field_match:
+                                        missing_field = field_match.group(1)
+                                        missing_fields.add(missing_field)
+                                except Exception:
+                                    pass
+                
+                # Add safe resolution fields to additional fields
+                additional_fields.extend(safe_resolution_fields)
+                
+                # Now get all additional fields that we've verified  
+                if additional_fields:
+                    fields_param = ",".join(additional_fields)
+                    logger.info(f"Fetching additional fields for {len(uncached_ids)} work items: {fields_param}")
+                    
+                    additional_response = self._make_api_request(
+                        "_apis/wit/workitems",
+                        params={
+                            "ids": ids_param,
+                            "fields": fields_param
+                        }
+                    )
+                    additional_response.raise_for_status()
+                    additional_result = additional_response.json()
+                    additional_items = additional_result.get("value", [])
+                    
+                    # Merge additional field data into the work items
+                    for work_item in work_items:
+                        work_item_id = work_item.get("id")
+                        for additional_item in additional_items:
+                            if additional_item.get("id") == work_item_id:
+                                work_item["fields"].update(additional_item.get("fields", {}))
+                                break
+            except Exception as e:
+                logger.warning(f"Failed to fetch additional fields: {str(e)}")
+                # Continue with basic fields - we can still process the items
+            
+            # Add these to the results
+            all_work_items.extend(work_items)
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch work items: {str(e)}")
+        
         return all_work_items
+        
+    def _determine_resolution_status(self, fields: Dict[str, Any]) -> str:
+        """Determine the resolution status of a work item with confidence indicators.
+        
+        Args:
+            fields: Dictionary of work item fields
+            
+        Returns:
+            String indicating resolution status with confidence level when appropriate
+        """
+        state = fields.get("System.State", "").lower()
+        resolution = fields.get("Microsoft.VSTS.Common.Resolution", "")
+        resolved_date = fields.get("System.ResolvedDate")
+        closed_date = fields.get("Microsoft.VSTS.Common.ClosedDate") or fields.get("System.ClosedDate")
+        
+        # Generate a stable hash for the item excluding the ChangedDate field
+        # This ensures consistent resolution status even if only the ChangedDate changes
+        # This helps prevent the same document from appearing as "new" on each connector run
+        field_data = {k: v for k, v in fields.items() if k != "System.ChangedDate"}
+        
+        # Build a clear resolution status with a deterministic process
+        
+        # 1. Explicit resolution field has highest priority
+        if resolution:
+            return "Resolved"
+        
+        # 2. Explicit date fields have high priority
+        if resolved_date:
+            return "Resolved"
+        elif closed_date:
+            return "Closed"
+        
+        # 3. State-based determination
+        resolved_states = ["resolved", "closed", "done", "completed", "fixed"]
+        active_states = ["new", "active", "in progress", "to do", "open"]
+        
+        if state in resolved_states:
+            return "Resolved"
+        elif state in active_states:
+            return "Not Resolved"
+        
+        # 4. If we can't determine status, be explicit about it
+        return "Unknown"
 
     def _get_work_item_comments(self, work_item_id: int) -> List[Dict[str, Any]]:
         """Get comments for a work item.
@@ -908,44 +1028,6 @@ class AzureDevOpsConnector(CheckpointConnector[AzureDevOpsConnectorCheckpoint], 
         except Exception as e:
             logger.error(f"Failed to process work item {work_item.get('id')}: {str(e)}")
             return None
-
-    def _determine_resolution_status(self, fields: Dict[str, Any]) -> str:
-        """Determine the resolution status of a work item with confidence indicators.
-        
-        Args:
-            fields: Dictionary of work item fields
-            
-        Returns:
-            String indicating resolution status with confidence level when appropriate
-        """
-        state = fields.get("System.State", "").lower()
-        resolution = fields.get("Microsoft.VSTS.Common.Resolution", "")
-        resolved_date = fields.get("System.ResolvedDate")
-        closed_date = fields.get("Microsoft.VSTS.Common.ClosedDate") or fields.get("System.ClosedDate")
-        
-        # Build a clear resolution status with a deterministic process
-        
-        # 1. Explicit resolution field has highest priority
-        if resolution:
-            return "Resolved"
-        
-        # 2. Explicit date fields have high priority
-        if resolved_date:
-            return "Resolved"
-        elif closed_date:
-            return "Closed"
-        
-        # 3. State-based determination
-        resolved_states = ["resolved", "closed", "done", "completed", "fixed"]
-        active_states = ["new", "active", "in progress", "to do", "open"]
-        
-        if state in resolved_states:
-            return "Resolved"
-        elif state in active_states:
-            return "Not Resolved"
-        
-        # 4. If we can't determine status, be explicit about it
-        return "Unknown"
 
     @override
     def load_from_checkpoint(
