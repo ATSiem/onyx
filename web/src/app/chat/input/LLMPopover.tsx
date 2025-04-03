@@ -10,7 +10,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { ChatInputOption } from "./ChatInputOption";
 import { getDisplayNameForModel } from "@/lib/hooks";
 import {
   checkLLMSupportsImageInput,
@@ -35,12 +34,16 @@ import { FiAlertTriangle } from "react-icons/fi";
 import { Slider } from "@/components/ui/slider";
 import { useUser } from "@/components/user/UserProvider";
 import { TruncatedText } from "@/components/ui/truncatedText";
+import { ChatInputOption } from "./ChatInputOption";
 
 interface LLMPopoverProps {
   llmProviders: LLMProviderDescriptor[];
   llmManager: LlmManager;
   requiresImageGeneration?: boolean;
   currentAssistant?: Persona;
+  trigger?: React.ReactElement;
+  onSelect?: (value: string) => void;
+  currentModelName?: string;
 }
 
 export default function LLMPopover({
@@ -48,6 +51,9 @@ export default function LLMPopover({
   llmManager,
   requiresImageGeneration,
   currentAssistant,
+  trigger,
+  onSelect,
+  currentModelName,
 }: LLMPopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
   const { user } = useUser();
@@ -178,12 +184,14 @@ export default function LLMPopover({
                 <button
                   key={index}
                   className={`w-full flex items-center gap-x-2 px-3 py-2 text-sm text-left hover:bg-background-100 dark:hover:bg-neutral-800 transition-colors duration-150 ${
-                    llmManager.currentLlm.modelName === name
+                    (currentModelName || llmManager.currentLlm.modelName) ===
+                    name
                       ? "bg-background-100 dark:bg-neutral-900 text-text"
                       : "text-text-darker"
                   }`}
                   onClick={() => {
                     llmManager.updateCurrentLlm(destructureValue(value));
+                    onSelect?.(value);
                     setIsOpen(false);
                   }}
                 >

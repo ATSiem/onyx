@@ -20,7 +20,7 @@ from onyx.auth.users import current_admin_user
 from onyx.auth.users import current_chat_accessible_user
 from onyx.auth.users import current_curator_or_admin_user
 from onyx.auth.users import current_user
-from onyx.background.celery.versioned_apps.primary import app as primary_app
+from onyx.background.celery.versioned_apps.client import app as client_app
 from onyx.configs.app_configs import ENABLED_CONNECTOR_TYPES
 from onyx.configs.app_configs import MOCK_CONNECTOR_FILE_PATH
 from onyx.configs.constants import DocumentSource
@@ -928,7 +928,7 @@ def create_connector_with_mock_credential(
         )
 
         # trigger indexing immediately
-        primary_app.send_task(
+        client_app.send_task(
             OnyxCeleryTask.CHECK_FOR_INDEXING,
             priority=OnyxCeleryPriority.HIGH,
             kwargs={"tenant_id": tenant_id},

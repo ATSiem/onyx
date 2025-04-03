@@ -253,8 +253,8 @@ export function ChatPage({
   );
 
   const { user, isAdmin } = useUser();
-  const slackChatId = searchParams.get("slackChatId");
-  const existingChatIdRaw = searchParams.get("chatId");
+  const slackChatId = searchParams?.get("slackChatId");
+  const existingChatIdRaw = searchParams?.get("chatId");
 
   const [showHistorySidebar, setShowHistorySidebar] = useState(false);
 
@@ -276,7 +276,7 @@ export function ChatPage({
 
   const processSearchParamsAndSubmitMessage = (searchParamsString: string) => {
     const newSearchParams = new URLSearchParams(searchParamsString);
-    const message = newSearchParams.get("user-prompt");
+    const message = newSearchParams?.get("user-prompt");
 
     filterManager.buildFiltersFromQueryString(
       newSearchParams.toString(),
@@ -285,7 +285,7 @@ export function ChatPage({
       tags
     );
 
-    const fileDescriptorString = newSearchParams.get(SEARCH_PARAM_NAMES.FILES);
+    const fileDescriptorString = newSearchParams?.get(SEARCH_PARAM_NAMES.FILES);
     const overrideFileDescriptors: FileDescriptor[] = fileDescriptorString
       ? JSON.parse(decodeURIComponent(fileDescriptorString))
       : [];
@@ -325,7 +325,7 @@ export function ChatPage({
         : undefined
   );
   // Gather default temperature settings
-  const search_param_temperature = searchParams.get(
+  const search_param_temperature = searchParams?.get(
     SEARCH_PARAM_NAMES.TEMPERATURE
   );
 
@@ -552,7 +552,7 @@ export function ChatPage({
       if (
         newMessageHistory.length === 1 &&
         !submitOnLoadPerformed.current &&
-        searchParams.get(SEARCH_PARAM_NAMES.SEEDED) === "true"
+        searchParams?.get(SEARCH_PARAM_NAMES.SEEDED) === "true"
       ) {
         submitOnLoadPerformed.current = true;
         const seededMessage = newMessageHistory[0].message;
@@ -573,7 +573,38 @@ export function ChatPage({
 
     initialSessionFetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [existingChatSessionId, searchParams.get(SEARCH_PARAM_NAMES.PERSONA_ID)]);
+  }, [existingChatSessionId, searchParams?.get(SEARCH_PARAM_NAMES.PERSONA_ID)]);
+
+  useEffect(() => {
+    const userFolderId = searchParams?.get(SEARCH_PARAM_NAMES.USER_FOLDER_ID);
+    const allMyDocuments = searchParams?.get(
+      SEARCH_PARAM_NAMES.ALL_MY_DOCUMENTS
+    );
+
+    if (userFolderId) {
+      const userFolder = userFolders.find(
+        (folder) => folder.id === parseInt(userFolderId)
+      );
+      if (userFolder) {
+        addSelectedFolder(userFolder);
+      }
+    } else if (allMyDocuments === "true" || allMyDocuments === "1") {
+      // Clear any previously selected folders
+
+      clearSelectedItems();
+
+      // Add all user folders to the current context
+      userFolders.forEach((folder) => {
+        addSelectedFolder(folder);
+      });
+    }
+  }, [
+    userFolders,
+    searchParams?.get(SEARCH_PARAM_NAMES.USER_FOLDER_ID),
+    searchParams?.get(SEARCH_PARAM_NAMES.ALL_MY_DOCUMENTS),
+    addSelectedFolder,
+    clearSelectedItems,
+  ]);
 
   useEffect(() => {
     const userFolderId = searchParams.get(SEARCH_PARAM_NAMES.USER_FOLDER_ID);
@@ -607,7 +638,7 @@ export function ChatPage({
   ]);
 
   const [message, setMessage] = useState(
-    searchParams.get(SEARCH_PARAM_NAMES.USER_PROMPT) || ""
+    searchParams?.get(SEARCH_PARAM_NAMES.USER_PROMPT) || ""
   );
 
   const [completeMessageDetail, setCompleteMessageDetail] = useState<
@@ -1049,7 +1080,7 @@ export function ChatPage({
 
   // Equivalent to `loadNewPageLogic`
   useEffect(() => {
-    if (searchParams.get(SEARCH_PARAM_NAMES.SEND_ON_LOAD)) {
+    if (searchParams?.get(SEARCH_PARAM_NAMES.SEND_ON_LOAD)) {
       processSearchParamsAndSubmitMessage(searchParams.toString());
     }
   }, [searchParams, router]);
@@ -1232,7 +1263,7 @@ export function ChatPage({
     const isNewSession = chatSessionIdRef.current === null;
 
     const searchParamBasedChatSessionName =
-      searchParams.get(SEARCH_PARAM_NAMES.TITLE) || null;
+      searchParams?.get(SEARCH_PARAM_NAMES.TITLE) || null;
 
     if (isNewSession) {
       currChatSessionId = await createChatSession(
@@ -1382,7 +1413,7 @@ export function ChatPage({
           regenerationRequest?.parentMessage.messageId ||
           lastSuccessfulMessageId,
         chatSessionId: currChatSessionId,
-        promptId: liveAssistant?.prompts[0]?.id || 0,
+        promptId: null,
         filters: buildFilters(
           filterManager.selectedSources,
           filterManager.selectedDocumentSets,
@@ -1410,11 +1441,11 @@ export function ChatPage({
         modelVersion:
           modelOverride?.modelName ||
           llmManager.currentLlm.modelName ||
-          searchParams.get(SEARCH_PARAM_NAMES.MODEL_VERSION) ||
+          searchParams?.get(SEARCH_PARAM_NAMES.MODEL_VERSION) ||
           undefined,
         temperature: llmManager.temperature || undefined,
         systemPromptOverride:
-          searchParams.get(SEARCH_PARAM_NAMES.SYSTEM_PROMPT) || undefined,
+          searchParams?.get(SEARCH_PARAM_NAMES.SYSTEM_PROMPT) || undefined,
         useExistingUserMessage: isSeededChat,
         useLanggraph:
           settings?.settings.pro_search_enabled &&

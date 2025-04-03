@@ -165,6 +165,7 @@ class DocumentManager:
             doc["fields"]["document_id"]: doc["fields"] for doc in retrieved_docs_dict
         }
 
+        # NOTE(rkuo): too much log spam
         # Left this here for debugging purposes.
         import json
 

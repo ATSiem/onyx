@@ -887,6 +887,7 @@ def main() -> None:
         type=int,
         help="Maximum number of documents to delete (for delete-all-documents)",
     )
+    parser.add_argument("--link", help="Document link (for get_acls filter)")
 
     args = parser.parse_args()
     vespa_debug = VespaDebugging(args.tenant_id)
