@@ -491,25 +491,25 @@ class TestAzureDevOpsConnector:
             checkpoint=checkpoint
         )
         
+        # Use CheckpointOutputWrapper to wrap the generator
+        from onyx.connectors.connector_runner import CheckpointOutputWrapper
+        
         # Collect all yielded items
         documents = []
         failures = []
         final_checkpoint = None
         
-        for item in generator:
-            from onyx.connectors.models import Document, ConnectorFailure, EntityFailure
-            
-            # If it's a tuple with 3 items and the last one is a checkpoint, it's the final yield
-            if isinstance(item, tuple) and len(item) == 3 and isinstance(item[2], AzureDevOpsConnectorCheckpoint):
-                doc, failure, checkpoint = item
-                if checkpoint is not None:
-                    final_checkpoint = checkpoint
-            elif isinstance(item, Document):
-                documents.append(item)
-            elif isinstance(item, ConnectorFailure):
-                failures.append(item)
-            elif isinstance(item, EntityFailure):
-                failures.append(item)
+        # Use the wrapper as it's used in production
+        wrapper = CheckpointOutputWrapper[AzureDevOpsConnectorCheckpoint]()
+        wrapped_generator = wrapper(generator)
+        
+        for doc, failure, next_checkpoint in wrapped_generator:
+            if doc is not None:
+                documents.append(doc)
+            if failure is not None:
+                failures.append(failure)
+            if next_checkpoint is not None:
+                final_checkpoint = next_checkpoint
         
         # Check that we got the expected number of documents
         assert len(documents) == 2
@@ -573,22 +573,23 @@ class TestAzureDevOpsConnector:
             checkpoint=checkpoint
         )
         
+        # Use CheckpointOutputWrapper to wrap the generator
+        from onyx.connectors.connector_runner import CheckpointOutputWrapper
+        
         # Collect all yielded items
         failures = []
         final_checkpoint = None
         
-        for item in generator:
-            from onyx.connectors.models import ConnectorFailure, EntityFailure
-            
-            # If it's a tuple with 3 items and the last one is a checkpoint, it's the final yield
-            if isinstance(item, tuple) and len(item) == 3 and isinstance(item[2], AzureDevOpsConnectorCheckpoint):
-                doc, failure, checkpoint = item
-                if checkpoint is not None:
-                    final_checkpoint = checkpoint
-            elif isinstance(item, ConnectorFailure):
-                failures.append(item)
-            elif isinstance(item, EntityFailure):
-                failures.append(item)
+        # Use the wrapper as it's used in production
+        wrapper = CheckpointOutputWrapper[AzureDevOpsConnectorCheckpoint]()
+        wrapped_generator = wrapper(generator)
+        
+        for doc, failure, next_checkpoint in wrapped_generator:
+            # In the error handling test, we don't expect any documents, only failures
+            if failure is not None:
+                failures.append(failure)
+            if next_checkpoint is not None:
+                final_checkpoint = next_checkpoint
         
         # Verify we got an entity failure
         assert len(failures) == 1
